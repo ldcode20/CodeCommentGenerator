@@ -133,7 +133,7 @@ def _extract_pairs_from_source(
 
     try:
         mf = extract_features(tree, source_code=source_code, filepath=filepath)
-        cg = analyze_context(mf, tree, source_code=source_code)
+        cg = analyze_context(mf, tree, source_code=source_code, include_security=False)
     except Exception:
         return []
 
@@ -170,6 +170,73 @@ def _extract_pairs_from_source(
 
 # ── HuggingFace CodeSearchNet ─────────────────────────────────────────────────
 
+# The original ``code_search_net`` entry is a *loading-script* dataset.  Those
+# were removed in ``datasets>=3.0``, so a single hardcoded id silently fails on
+# a modern install and the whole corpus quietly degrades to the (much smaller,
+# much narrower) stdlib crawl.  Try the known-good sources in order instead and
+# say which one actually answered.
+_CODESEARCHNET_SOURCES = [
+    # (repo id, config name)
+    ("code-search-net/code_search_net", "python"),   # canonical hub id, parquet
+    ("Nan-Do/code-search-net-python",   None),       # community parquet mirror
+    ("code_search_net",                 "python"),   # legacy script id
+]
+
+#: Column aliases across the mirrors above, in priority order.
+_CODE_COLUMNS = ("func_code_string", "whole_func_string", "code", "function")
+_DOC_COLUMNS  = ("func_documentation_string", "docstring", "summary")
+_NAME_COLUMNS = ("func_name", "function_name", "name")
+
+
+def _first_present(row, columns):
+    """Return the first non-empty value among ``columns`` in ``row``."""
+    for col in columns:
+        val = row.get(col)
+        if val:
+            return val
+    return ""
+
+
+def _load_codesearchnet_hub(split: str = "train", verbose: bool = True):
+    """
+    Load CodeSearchNet Python, trying each known source until one works.
+
+    Returns the HuggingFace dataset, or ``None`` if every source failed (the
+    caller then falls back to the stdlib crawl).
+    """
+    try:
+        from datasets import load_dataset
+    except ImportError:
+        if verbose:
+            print("  [dataset] `datasets` not installed — pip install datasets")
+        return None
+
+    errors = []
+    for repo_id, config in _CODESEARCHNET_SOURCES:
+        label = f"{repo_id}" + (f":{config}" if config else "")
+        if verbose:
+            print(f"  [dataset] Trying {label} ({split}) …")
+        try:
+            if config:
+                ds = load_dataset(repo_id, config, split=split)
+            else:
+                ds = load_dataset(repo_id, split=split)
+            if verbose:
+                print(f"  [dataset] Loaded {label} — {len(ds)} rows")
+            return ds
+        except Exception as exc:
+            errors.append(f"{label}: {type(exc).__name__}: {exc}")
+            if verbose:
+                print(f"  [dataset]   unavailable ({type(exc).__name__})")
+
+    if verbose:
+        print("  [dataset] All CodeSearchNet sources failed — "
+              "falling back to the Python stdlib crawl.")
+        for err in errors:
+            print(f"  [dataset]   - {err[:160]}")
+    return None
+
+
 def build_codesearchnet_dataset(
     split: str = "train",
     max_samples: int = 30_000,
@@ -190,24 +257,8 @@ def build_codesearchnet_dataset(
     Returns:
         List of ASTTrainPair.
     """
-    try:
-        from datasets import load_dataset
-    except ImportError:
-        if verbose:
-            print("  [dataset] `datasets` not installed — pip install datasets")
-        return []
-
-    if verbose:
-        print(f"  [dataset] Downloading CodeSearchNet Python ({split}) …")
-
-    try:
-        ds = load_dataset(
-            "code_search_net", "python",
-            split=split,
-        )
-    except Exception as exc:
-        if verbose:
-            print(f"  [dataset] CodeSearchNet download failed: {exc}")
+    ds = _load_codesearchnet_hub(split=split, verbose=verbose)
+    if ds is None:
         return []
 
     pairs: List[ASTTrainPair] = []
@@ -217,9 +268,9 @@ def build_codesearchnet_dataset(
         if len(pairs) >= max_samples:
             break
 
-        func_source = row.get("func_code_string", "")
-        docstring   = row.get("func_documentation_string", "").strip()
-        func_name   = row.get("func_name", "").split(".")[-1]
+        func_source = _first_present(row, _CODE_COLUMNS)
+        docstring   = _first_present(row, _DOC_COLUMNS).strip()
+        func_name   = _first_present(row, _NAME_COLUMNS).split(".")[-1]
 
         if not func_source or not docstring or not func_name:
             continue

@@ -210,6 +210,7 @@ class InsightsWorkspace(QWidget):
         self.table_analysis.horizontalHeader().setStretchLastSection(True)
 
         import json, os
-        eval_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "outputs", "eval_report.json")
-        train_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "outputs", "training_report.json")
+        from src.config import EVAL_REPORT, TRAINING_REPORT
+        eval_path = str(EVAL_REPORT)
+        train_path = str(TRAINING_REPORT)
         self.eval_graph.set_data(eval_json_path=eval_path, training_json_path=train_path)

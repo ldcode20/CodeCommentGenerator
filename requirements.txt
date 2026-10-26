@@ -1,0 +1,27 @@
+# ──────────────────────────────────────────────────────────────────────────
+# Code Comment Generator — dependencies
+#
+# IMPORTANT: use Python 3.12 (or 3.11). PyTorch has no wheels for Python 3.14,
+# which is the default `python` on some Windows installs. See README
+# "Troubleshooting" for the venv setup command.
+#
+# For CUDA builds of torch on Windows, install torch FIRST from the CUDA index:
+#     pip install torch --index-url https://download.pytorch.org/whl/cu121
+# then `pip install -r requirements.txt`. Plain `pip install -r` gives CPU torch.
+# ──────────────────────────────────────────────────────────────────────────
+
+# ── core ──────────────────────────────────────────────────────────────────
+numpy>=1.26
+
+# ── ML (required for --train / --ml / --neurosymbolic) ────────────────────
+torch>=2.4
+transformers>=4.44,<5
+sentencepiece
+datasets>=2.19
+nltk
+
+# ── GUI (required for run_gui.py) ─────────────────────────────────────────
+PyQt6
+
+# ── dev ───────────────────────────────────────────────────────────────────
+pytest

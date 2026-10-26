@@ -105,6 +105,10 @@ class CFG:
             queue.extend(self.nodes[label].successors)
         return visited
 
+    def reachable(self) -> "set[str]":
+        """Labels reachable from the entry node."""
+        return set(self.topological_order())
+
     def __repr__(self) -> str:
         return (
             f"CFG({self.function_name!r}, "

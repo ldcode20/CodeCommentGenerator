@@ -287,7 +287,12 @@ def extract_features(tree: ast.AST, source_code: str = "", filepath: str = "") -
         ModuleFeatures dataclass with all extracted information
     """
     extractor = FeatureExtractor(filepath=filepath)
-    return extractor.extract(tree, source_code)
+    mf = extractor.extract(tree, source_code)
+    # Kept as plain attributes (not dataclass fields) so features_to_dict()
+    # stays JSON-serialisable; build_ir() lowers from this tree.
+    mf._ast_tree = tree
+    mf._source = source_code
+    return mf
 
 
 def features_to_dict(mf: ModuleFeatures) -> Dict[str, Any]:

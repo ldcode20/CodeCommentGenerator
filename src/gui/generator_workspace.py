@@ -11,6 +11,7 @@ import traceback
 from src.main import run_pipeline
 from src.logger import PipelineLogger
 from src.gui.syntax_highlighter import PythonSyntaxHighlighter
+from src.config import OUTPUT_DIR
 from src.ml.trainer import load_ast_model
 
 _SPINNER_FRAMES = ["\u28f7", "\u28ef", "\u28df", "\u28dd", "\u28d9", "\u28d1",
@@ -42,7 +43,7 @@ class GeneratorWorker(QThread):
             if self.engine in ("ml", "neurosymbolic"):
                 self.status.emit("Loading AST+NLP ML model...")
                 try:
-                    ast_model = load_ast_model(output_dir="outputs")
+                    ast_model = load_ast_model(output_dir=str(OUTPUT_DIR))
                     if ast_model is None:
                         raise RuntimeError(
                             "No trained AST+NLP model found. "

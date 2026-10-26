@@ -5,276 +5,58 @@ Converts the Week 7 ModuleFeatures + ContextGraph into an IRModule.
 
 Lowering strategy
 -----------------
-For every FunctionFeature we produce one IRFunction.  Each function gets a
-sequence of IRBlocks generated from the structural information we already
-have (parameter loads, variable assignments, calls, loops, branches, return).
+Each function is lowered statement-by-statement from its real AST by
+``ir.lowering`` (see that module for the control-flow constructs modelled).
+Every instruction keeps the source line/column of the node it came from.
 
-Because we are lifting from high-level AST features (not bytecode or a full
-parse-tree walk), the IR is *descriptive* rather than fully executable — it
-faithfully captures the control-flow skeleton and data dependencies so that
-the analysis passes (CFG, DFA, pattern detection) can reason about the code.
+The original Week 8 builder synthesised ``loop_N`` / ``branch_N`` blocks from
+loop and conditional *counts* with placeholder operands (``__cond_lhs__``),
+so CFG and data-flow results did not describe the program.  It also linked
+blocks before they were appended, leaving every branch-condition block
+without predecessors.  ``build_ir`` keeps the same public signature and the
+same block-label vocabulary (``entry``, ``exit``, ``loop_N_*``,
+``branch_N_*``) so the CFG/DFA/pattern passes and the GUI continue to work.
 
-Builder algorithm per function
--------------------------------
-1. ``entry`` block  — LABEL + one LOAD per parameter
-2. For each call recorded in FunctionFeature.calls_made → CALL instruction
-3. If loops > 0   → ``loop_N`` block with BRANCH (loop condition) + JUMP back
-4. If conditionals > 0 → ``branch_N`` block  with BRANCH (if condition)
-5. Variable assignments from ContextGraph.VariableInfo → ASSIGN instructions
-6. ``exit`` block  — RETURN instruction
-7. Wire successor / predecessor edges between blocks.
+``build_ir`` returns one IRFunction per FunctionFeature (module functions and
+methods, in extraction order).  Security analysis uses
+``lowering.lower_module`` directly, which additionally lowers nested
+functions and the module body.
 """
 from __future__ import annotations
 
-import re
-from typing import Dict, List, Optional
+import ast
+import os
+from typing import Dict, Optional, Tuple
 
-from ..ast_extractor import ModuleFeatures, FunctionFeature
-from ..context_analyzer import ContextGraph, FunctionContext
+from ..ast_extractor import ModuleFeatures
+from ..context_analyzer import ContextGraph
 
-from .ir_nodes import (
-    IROpcode, IRInstruction, IRBlock, IRFunction, IRModule,
-)
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-class _TempCounter:
-    """Simple sequential temporary-name generator: t0, t1, t2 …"""
-    def __init__(self):
-        self._n = 0
-
-    def next(self) -> str:
-        name = f"t{self._n}"
-        self._n += 1
-        return name
+from .ir_nodes import IRModule, IRFunction
+from .lowering import lower_module
 
 
-class _BlockBuilder:
-    """Convenience wrapper for building a single IR basic block."""
-
-    def __init__(self, label: str):
-        self._block = IRBlock(label=label)
-
-    def emit(self, op: IROpcode, result: Optional[str] = None,
-             operands: Optional[List[str]] = None,
-             lineno: int = 0,
-             **meta) -> IRInstruction:
-        instr = IRInstruction(
-            op=op,
-            result=result,
-            operands=operands or [],
-            lineno=lineno,
-            meta={k: str(v) for k, v in meta.items()},
-        )
-        self._block.instructions.append(instr)
-        return instr
-
-    def build(self) -> IRBlock:
-        return self._block
-
-
-def _link_block(ir_func: IRFunction, from_label: str, to_label: str) -> None:
-    """Safely link two blocks by label (successor/predecessor edge)."""
-    src = ir_func.get_block(from_label)
-    dst = ir_func.get_block(to_label)
-    if src and dst:
-        if to_label not in src.successors:
-            src.successors.append(to_label)
-        if from_label not in dst.predecessors:
-            dst.predecessors.append(from_label)
-
-
-# ---------------------------------------------------------------------------
-# Function lowering
-# ---------------------------------------------------------------------------
-
-def _lower_function(
-    ff: FunctionFeature,
-    fc: Optional[FunctionContext],
-    temps: _TempCounter,
-) -> IRFunction:
-    """Lower one FunctionFeature + its optional FunctionContext into IRFunction."""
-
-    ir_func = IRFunction(
-        name=ff.name,
-        params=[p.name for p in ff.params],
-        return_type=ff.return_annotation,
-        is_method=ff.is_method,
-        is_async=ff.is_async,
-        source_lineno=ff.lineno,
-    )
-
-    # ── 1. Entry block ──────────────────────────────────────────────────
-    entry = _BlockBuilder("entry")
-    entry.emit(IROpcode.LABEL, lineno=ff.lineno, name="entry")
-
-    # ff.params is a List[ParamFeature]; use .name to get the string
-    for param in ff.params:
-        t = temps.next()
-        entry.emit(IROpcode.LOAD, result=t, operands=[param.name], lineno=ff.lineno)
-
-    entry_block = entry.build()
-    ir_func.blocks.append(entry_block)
-    prev_label = "entry"
-
-    # ── 2. Variable assignment block ─────────────────────────────────────
-    if fc and fc.variables:
-        assign_bb = _BlockBuilder("vars")
-        assign_bb.emit(IROpcode.LABEL, lineno=ff.lineno, name="vars")
-        for vi in fc.variables:
-            if vi.assigned_at:
-                t = temps.next()
-                assign_bb.emit(
-                    IROpcode.ASSIGN,
-                    result=t,
-                    operands=[vi.name],
-                    lineno=vi.assigned_at[0],
-                    inferred_type=vi.inferred_type or "unknown",
-                )
-        vars_block = assign_bb.build()
-        ir_func.blocks.append(vars_block)
-        _link_block(ir_func, prev_label, "vars")
-        prev_label = "vars"
-
-    # ── 3. Call block ────────────────────────────────────────────────────
-    if ff.calls_made:
-        calls_bb = _BlockBuilder("calls")
-        calls_bb.emit(IROpcode.LABEL, lineno=ff.lineno, name="calls")
-        for callee in ff.calls_made:
-            t = temps.next()
-            calls_bb.emit(
-                IROpcode.CALL,
-                result=t,
-                operands=[callee],
-                lineno=ff.lineno,
-                callee=callee,
+def _module_tree(module_features: ModuleFeatures) -> Tuple[ast.Module, str]:
+    """Recover the AST and source that ``extract_features`` was run on."""
+    tree = getattr(module_features, "_ast_tree", None)
+    source = getattr(module_features, "_source", "") or ""
+    if tree is None:
+        path = module_features.filepath
+        if not path or not os.path.isfile(path):
+            raise ValueError(
+                "build_ir needs the parsed AST: call extract_features(tree, source) "
+                "first, or pass ast_tree= explicitly."
             )
-        calls_block = calls_bb.build()
-        ir_func.blocks.append(calls_block)
-        _link_block(ir_func, prev_label, "calls")
-        prev_label = "calls"
+        with open(path, encoding="utf-8") as fh:
+            source = fh.read()
+        tree = ast.parse(source)
+    return tree, source
 
-    # ── 4. Loop blocks ──────────────────────────────────────────────────
-    loop_lineno = ff.lineno + 1  # approximate; we don't have exact loop start
-    for i in range(ff.loops):
-        loop_label  = f"loop_{i}_header"
-        body_label  = f"loop_{i}_body"
-        after_label = f"loop_{i}_after"
-
-        # Loop header: branch on condition
-        header_bb = _BlockBuilder(loop_label)
-        header_bb.emit(IROpcode.LABEL, lineno=loop_lineno, name=loop_label)
-        t_cond = temps.next()
-        header_bb.emit(IROpcode.BINOP, result=t_cond, operands=["__iter__", "__end__"],
-                       lineno=loop_lineno, operator="lt")
-        header_bb.emit(IROpcode.BRANCH, operands=[t_cond, body_label, after_label],
-                       lineno=loop_lineno)
-        header_block = header_bb.build()
-
-        # Loop body
-        body_bb = _BlockBuilder(body_label)
-        body_bb.emit(IROpcode.LABEL, lineno=loop_lineno, name=body_label)
-        t_body = temps.next()
-        body_bb.emit(IROpcode.NOP, result=t_body, lineno=loop_lineno, note="loop_body")
-        body_bb.emit(IROpcode.JUMP, operands=[loop_label], lineno=loop_lineno)
-        body_block = body_bb.build()
-
-        # After-loop placeholder
-        after_bb = _BlockBuilder(after_label)
-        after_bb.emit(IROpcode.LABEL, lineno=loop_lineno, name=after_label)
-        after_block = after_bb.build()
-
-        # Wire edges
-        _link_block(ir_func, prev_label, loop_label)
-        header_block.successors  += [body_label, after_label]
-        body_block.predecessors.append(loop_label)
-        body_block.successors.append(loop_label)       # back-edge
-        header_block.predecessors.append(body_label)   # back-edge target
-        after_block.predecessors.append(loop_label)
-
-        ir_func.blocks += [header_block, body_block, after_block]
-        prev_label = after_label
-        loop_lineno += 3  # rough spacing
-
-    # ── 5. Branch blocks ────────────────────────────────────────────────
-    branch_lineno = ff.lineno + 2
-    for j in range(ff.conditionals):
-        true_label  = f"branch_{j}_true"
-        false_label = f"branch_{j}_false"
-        join_label  = f"branch_{j}_join"
-
-        # Condition evaluation
-        cond_bb = _BlockBuilder(f"branch_{j}_cond")
-        cond_bb.emit(IROpcode.LABEL, lineno=branch_lineno, name=f"branch_{j}_cond")
-        t_cond = temps.next()
-        cond_bb.emit(IROpcode.BINOP, result=t_cond, operands=["__cond_lhs__", "__cond_rhs__"],
-                     lineno=branch_lineno, operator="eq")
-        cond_bb.emit(IROpcode.BRANCH, operands=[t_cond, true_label, false_label],
-                     lineno=branch_lineno)
-        cond_block = cond_bb.build()
-
-        true_bb = _BlockBuilder(true_label)
-        true_bb.emit(IROpcode.LABEL, lineno=branch_lineno, name=true_label)
-        t_true = temps.next()
-        true_bb.emit(IROpcode.NOP, result=t_true, lineno=branch_lineno, note="then_branch")
-        true_bb.emit(IROpcode.JUMP, operands=[join_label], lineno=branch_lineno)
-        true_block = true_bb.build()
-
-        false_bb = _BlockBuilder(false_label)
-        false_bb.emit(IROpcode.LABEL, lineno=branch_lineno, name=false_label)
-        t_false = temps.next()
-        false_bb.emit(IROpcode.NOP, result=t_false, lineno=branch_lineno, note="else_branch")
-        false_bb.emit(IROpcode.JUMP, operands=[join_label], lineno=branch_lineno)
-        false_block = false_bb.build()
-
-        join_bb = _BlockBuilder(join_label)
-        join_bb.emit(IROpcode.LABEL, lineno=branch_lineno, name=join_label)
-        phi_t = temps.next()
-        join_bb.emit(IROpcode.PHI, result=phi_t, operands=[t_true, t_false],
-                     lineno=branch_lineno)
-        join_block = join_bb.build()
-
-        # Wire edges
-        _link_block(ir_func, prev_label, f"branch_{j}_cond")
-        cond_block.successors   += [true_label, false_label]
-        true_block.predecessors.append(f"branch_{j}_cond")
-        true_block.successors.append(join_label)
-        false_block.predecessors.append(f"branch_{j}_cond")
-        false_block.successors.append(join_label)
-        join_block.predecessors += [true_label, false_label]
-
-        ir_func.blocks += [cond_block, true_block, false_block, join_block]
-        prev_label = join_label
-        branch_lineno += 4
-
-    # ── 6. Exit block ────────────────────────────────────────────────────
-    exit_bb = _BlockBuilder("exit")
-    exit_bb.emit(IROpcode.LABEL, lineno=ff.lineno, name="exit")
-    t_ret = temps.next()
-    exit_bb.emit(
-        IROpcode.RETURN,
-        operands=[t_ret],
-        lineno=ff.lineno + ff.body_lines,
-        return_type=ff.return_annotation or "None",
-    )
-    exit_block = exit_bb.build()
-
-    ir_func.blocks.append(exit_block)
-    _link_block(ir_func, prev_label, "exit")
-
-    return ir_func
-
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 def build_ir(
     module_features: ModuleFeatures,
-    context_graph: ContextGraph,
+    context_graph: Optional[ContextGraph] = None,
+    ast_tree: Optional[ast.Module] = None,
+    source_code: Optional[str] = None,
 ) -> IRModule:
     """
     Lower Week 7 analysis results into an IRModule.
@@ -282,21 +64,27 @@ def build_ir(
     Args:
         module_features : Output of ``ast_extractor.extract_features()``.
         context_graph   : Output of ``context_analyzer.analyze_context()``.
+                          Accepted for API compatibility; lowering works
+                          from the AST itself.
+        ast_tree        : Parsed module (defaults to the tree recorded by
+                          ``extract_features``).
+        source_code     : Original source (used for statement snippets).
 
     Returns:
         IRModule containing one IRFunction per Python function in the source.
     """
-    ir_module = IRModule(source_file=module_features.filepath)
-    temps = _TempCounter()
+    if ast_tree is None:
+        ast_tree, recorded_source = _module_tree(module_features)
+        source_code = source_code if source_code is not None else recorded_source
+    lowered = lower_module(ast_tree, source_code or "", module_features.filepath)
 
-    # Build a lookup from function name → FunctionContext
-    fc_map: Dict[str, FunctionContext] = {
-        fc.name: fc for fc in context_graph.function_contexts
+    by_key: Dict[Tuple[str, int], IRFunction] = {
+        (f.name, f.source_lineno): f for f in lowered.functions
     }
-
+    ir_module = IRModule(source_file=module_features.filepath, imports=lowered.imports,
+                         module_body=lowered.module_body)
     for ff in module_features.functions:
-        fc = fc_map.get(ff.name)
-        ir_func = _lower_function(ff, fc, temps)
-        ir_module.functions.append(ir_func)
-
+        fn = by_key.get((ff.name, ff.lineno))
+        if fn is not None:
+            ir_module.functions.append(fn)
     return ir_module

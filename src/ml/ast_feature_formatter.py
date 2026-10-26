@@ -152,7 +152,7 @@ def format_from_source(source_code: str, func_name: str) -> Optional[str]:
 
         tree = _ast.parse(source_code)
         mf   = extract_features(tree, source_code=source_code)
-        cg   = analyze_context(mf, tree, source_code)
+        cg   = analyze_context(mf, tree, source_code, include_security=False)
 
         fc_map = {fc.name: fc for fc in cg.function_contexts}
 
