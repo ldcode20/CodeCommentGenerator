@@ -65,6 +65,11 @@ MODEL_NAME    = "google-t5/t5-small"
 MAX_INPUT_LEN  = 256   # tokens for the structured AST feature text
 MAX_TARGET_LEN = 64    # tokens for the generated docstring
 
+# Worker subprocesses are a net loss on Windows: `spawn` re-imports the whole
+# module for every worker, and inside the GUI's QThread the spawn handshake is
+# fragile.  Linux/macOS keep the parallel loaders.
+DATALOADER_WORKERS = 0 if os.name == "nt" else 2
+
 
 # ── Torch Dataset ─────────────────────────────────────────────────────────────
 
@@ -136,6 +141,7 @@ class ASTCommentModel:
         self._device          = "cuda" if torch.cuda.is_available() else "cpu"
         self._fine_tuned      = False
         self._loss_history: List[float] = []
+        self._val_history:  List[float] = []
 
     # ── Lazy loading ──────────────────────────────────────────────────────────
 
@@ -189,13 +195,15 @@ class ASTCommentModel:
 
         train_ds = _ASTDataset(train_data, self._tokenizer)
         train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
-                              num_workers=2, pin_memory=(self._device == "cuda"))
+                              num_workers=DATALOADER_WORKERS,
+                              pin_memory=(self._device == "cuda"))
 
         val_dl = None
         if val_data:
             val_ds = _ASTDataset(val_data, self._tokenizer)
             val_dl = DataLoader(val_ds, batch_size=batch_size,
-                                num_workers=2, pin_memory=(self._device == "cuda"))
+                                num_workers=DATALOADER_WORKERS,
+                                pin_memory=(self._device == "cuda"))
 
         optimizer     = AdamW(self._model.parameters(), lr=lr, weight_decay=0.01)
         grad_accum_steps = max(1, int(grad_accum_steps))
@@ -206,50 +214,107 @@ class ASTCommentModel:
             num_training_steps=total_steps,
         )
 
+        # Mixed precision keeps batch_size 8 comfortable on a 4 GB card.
+        #
+        # bfloat16 specifically, NOT float16: T5 was pretrained in bf16 and its
+        # attention logits routinely overflow fp16's range, which shows up as
+        # NaN losses a few hundred steps in.  bf16 has the same exponent range
+        # as fp32, so it is stable.  Ampere (RTX 30xx/20x0) and newer support
+        # it; on anything older we simply train in fp32.
+        use_amp   = (self._device == "cuda" and torch.cuda.is_bf16_supported())
+        amp_dtype = torch.bfloat16
+        # bf16 needs no loss scaling — the scaler stays disabled and its calls
+        # below are no-ops, kept so the loop reads the same either way.
+        scaler    = torch.amp.GradScaler("cuda", enabled=False)
+
         self._model.train()
         self._loss_history = []
+        self._val_history = []
+        best_val   = float("inf")
+        best_state = None
+        best_epoch = 0
 
         if verbose:
             print(f"  [ast_model] Fine-tuning on {len(train_data)} pairs "
                   f"(val={len(val_data)}) for {epochs} epoch(s) on {self._device} …")
 
-        for epoch in range(epochs):
-            t0 = time.time()
-            epoch_loss = 0.0
-            optimizer.zero_grad()
-            for step_idx, batch in enumerate(train_dl, start=1):
-                batch = {k: v.to(self._device) for k, v in batch.items()}
-                loss = self._model(**batch).loss / grad_accum_steps
-                loss.backward()
-                epoch_loss += loss.item() * grad_accum_steps
+        try:
+            for epoch in range(epochs):
+                t0 = time.time()
+                epoch_loss = 0.0
+                optimizer.zero_grad()
+                for step_idx, batch in enumerate(train_dl, start=1):
+                    batch = {k: v.to(self._device) for k, v in batch.items()}
+                    with torch.amp.autocast("cuda", dtype=amp_dtype,
+                                            enabled=use_amp):
+                        loss = self._model(**batch).loss / grad_accum_steps
+                    scaler.scale(loss).backward()
+                    epoch_loss += loss.item() * grad_accum_steps
 
-                if step_idx % grad_accum_steps == 0 or step_idx == len(train_dl):
-                    torch.nn.utils.clip_grad_norm_(self._model.parameters(), 1.0)
-                    optimizer.step()
-                    scheduler.step()
-                    optimizer.zero_grad()
+                    if step_idx % grad_accum_steps == 0 or step_idx == len(train_dl):
+                        scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(self._model.parameters(), 1.0)
+                        scaler.step(optimizer)
+                        scaler.update()
+                        scheduler.step()
+                        optimizer.zero_grad()
 
-            avg = epoch_loss / max(len(train_dl), 1)
-            self._loss_history.append(avg)
+                avg = epoch_loss / max(len(train_dl), 1)
+                self._loss_history.append(avg)
 
-            val_loss = None
-            if val_dl:
-                self._model.eval()
-                vl = sum(
-                    self._model(**{k: v.to(self._device) for k, v in b.items()}).loss.item()
-                    for b in val_dl
-                )
-                val_loss = vl / max(len(val_dl), 1)
-                self._model.train()
+                val_loss = None
+                if val_dl:
+                    self._model.eval()
+                    with torch.no_grad():
+                        vl = sum(
+                            self._model(
+                                **{k: v.to(self._device) for k, v in b.items()}
+                            ).loss.item()
+                            for b in val_dl
+                        )
+                    val_loss = vl / max(len(val_dl), 1)
+                    self._val_history.append(val_loss)
+                    self._model.train()
 
-            elapsed = time.time() - t0
+                # Keep the best weights rather than whichever epoch ran last —
+                # on a small corpus the final epoch is often already overfit.
+                score = val_loss if val_loss is not None else avg
+                if score < best_val:
+                    best_val   = score
+                    best_epoch = epoch + 1
+                    best_state = {
+                        k: v.detach().cpu().clone()
+                        for k, v in self._model.state_dict().items()
+                    }
+
+                elapsed = time.time() - t0
+                if verbose:
+                    msg = (f"  [ast_model] Epoch {epoch+1}/{epochs} — "
+                           f"train_loss={avg:.4f}")
+                    if val_loss is not None:
+                        msg += f"  val_loss={val_loss:.4f}"
+                    msg += f"  ({elapsed:.1f}s)"
+                    if best_epoch == epoch + 1:
+                        msg += "  *best*"
+                    print(msg)
+
+                if self._device == "cuda":
+                    torch.cuda.empty_cache()
+
+        except torch.cuda.OutOfMemoryError as exc:
+            torch.cuda.empty_cache()
+            raise RuntimeError(
+                f"CUDA ran out of memory at batch_size={batch_size}. "
+                f"Retry smaller, e.g. --batch-size {max(1, batch_size // 2)} "
+                f"--grad-accum-steps 2"
+            ) from exc
+
+        # Restore the best checkpoint so save() persists it, not the last epoch.
+        if best_state is not None and best_epoch != epochs:
             if verbose:
-                msg = (f"  [ast_model] Epoch {epoch+1}/{epochs} — "
-                       f"train_loss={avg:.4f}")
-                if val_loss is not None:
-                    msg += f"  val_loss={val_loss:.4f}"
-                msg += f"  ({elapsed:.1f}s)"
-                print(msg)
+                print(f"  [ast_model] Restoring best weights from epoch "
+                      f"{best_epoch} (loss={best_val:.4f})")
+            self._model.load_state_dict(best_state)
 
         self._fine_tuned = True
         return {
@@ -260,6 +325,10 @@ class ASTCommentModel:
             "grad_accum_steps": grad_accum_steps,
             "final_loss": round(self._loss_history[-1], 4) if self._loss_history else None,
             "loss_history": [round(l, 4) for l in self._loss_history],
+            "val_loss_history": [round(l, 4) for l in self._val_history],
+            "best_epoch": best_epoch,
+            "best_loss": round(best_val, 4) if best_val != float("inf") else None,
+            "mixed_precision": "bfloat16" if use_amp else "fp32",
             "device": self._device,
         }
 
@@ -405,9 +474,10 @@ class ASTCommentModel:
         self._model.save_pretrained(directory)
         self._tokenizer.save_pretrained(directory)
         meta = {
-            "model_name":   self._model_name,
-            "fine_tuned":   self._fine_tuned,
-            "loss_history": self._loss_history,
+            "model_name":       self._model_name,
+            "fine_tuned":       self._fine_tuned,
+            "loss_history":     self._loss_history,
+            "val_loss_history": getattr(self, "_val_history", []),
         }
         with open(os.path.join(directory, "ast_model_meta.json"), "w") as f:
             json.dump(meta, f, indent=2)
@@ -429,6 +499,7 @@ class ASTCommentModel:
         inst._device        = "cuda" if torch.cuda.is_available() else "cpu"
         inst._fine_tuned    = meta.get("fine_tuned", False)
         inst._loss_history  = meta.get("loss_history", [])
+        inst._val_history   = meta.get("val_loss_history", [])
 
         inst._tokenizer = AutoTokenizer.from_pretrained(directory)
         inst._model     = T5ForConditionalGeneration.from_pretrained(directory)

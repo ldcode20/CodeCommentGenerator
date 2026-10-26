@@ -82,7 +82,7 @@
 - **Control-Flow Graph (CFG)**: Constructs CFGs from IR for each function.
 - **Data-Flow Analysis (DFA)**: Implements reaching definitions (forward) and live variable analysis (backward) using worklist algorithms.
 - **Pattern Detection**: Identifies 7 code-quality patterns (unused variables, high complexity, dead blocks, missing returns, deep nesting, excessive calls, missing param loads).
-- **Security Analysis**: Detects 12 security anti-patterns (eval/exec, shell injection, weak crypto, SQL injection, hardcoded secrets, unsafe deserialization, insecure random, mutable defaults, bare except, assert in production, hardcoded IPs).
+- **Security Analysis**: Interprocedural, per-context taint analysis over the real IR/CFG (SQL injection, command injection, XSS, path traversal, template injection, code injection, unsafe deserialization) plus AST rules (hardcoded secrets, weak hashes, bare except, mutable defaults, assert, insecure random, hardcoded IPs). Every finding carries CWE, severity, confidence, status and a source-to-sink evidence trace on original source lines. See [SECURITY_ANALYSIS.md](SECURITY_ANALYSIS.md).
 - **ML Pipeline**: Builds datasets from CodeSearchNet + Python stdlib, fine-tunes T5-small on (AST feature text -> docstring) pairs, evaluates with BLEU-4/ROUGE-L/Exact Match.
 - **Neurosymbolic Fusion**: Gated combination of ML and symbolic generation with consistency validation.
 - **Docstring Safety**: Automatic sanitization prevents malformed docstrings (triple-quote escaping, raw string prefix removal).
@@ -247,12 +247,12 @@ The full pipeline is executed by `src/main.py:run_pipeline()` and consists of 9 
 | 1 | **parse** | `parser_module` | Read source file, parse to AST via `ast.parse()` |
 | 2 | **validate** | `validator` | Check naming conventions (snake_case functions, CamelCase classes, arg count) |
 | 3 | **extract** | `ast_extractor` | Walk AST to extract `ModuleFeatures` — functions, classes, imports, loops, conditionals, calls, decorators |
-| 4 | **analyze** | `context_analyzer` | Compute cyclomatic complexity, variable tracking, call graph, security issues → `ContextGraph` |
+| 4 | **analyze** | `context_analyzer` | Compute cyclomatic complexity, variable tracking, call graph; security warnings taken from `src/security` → `ContextGraph` |
 | 5 | **generate** | `comment_generator` / neurosymbolic | Generate docstrings + inline comments using rule-based, ML, or neurosymbolic engine |
 | 6 | **attach** | `comment_attacher` | Insert generated comments into original source at correct positions with proper indentation |
-| 7 | **build_ir** | `ir_builder` | Lower `ModuleFeatures` + `ContextGraph` into `IRModule` (3-address code with basic blocks) |
+| 7 | **build_ir** | `ir_builder` → `ir.lowering` | Lower the real AST of each function into `IRModule` (3-address code with basic blocks, source line/col on every instruction) |
 | 8 | **analysis** | `cfg_builder` + `dfa_engine` + `pattern_detector` | Build CFG, run DFA (reaching defs + live vars), detect code quality patterns |
-| 9 | **security** | `security_analyzer` | Comprehensive security scan for 12 anti-pattern categories → `SecurityReport` |
+| 9 | **security** | `security_analyzer` → `src/security` | Taint + AST security analysis of the *original* source (15 rules) → `SecurityReport` |
 
 ---
 
@@ -500,19 +500,20 @@ Computed by `CyclomaticComplexityVisitor`, which counts:
 - Usage via `visit_Name` (when `ctx` is `Load`)
 - Type inference from RHS literals (constants → type name, list/dict/set/tuple → type name, calls → function name)
 
-#### Basic Security Detection (in context_analyzer)
+#### Security warnings (from the central analyzer)
 
-The context analyzer also flags basic security issues:
-- `eval` / `exec` / `compile` usage
-- `subprocess` with `shell=True`
-- Weak crypto (`md5`, `sha1`)
-- Hardcoded secrets (variables named with `password`, `secret`, `token` that are strings)
+`FunctionContext.security_issues` is filled from `src.security.analyze_source`
+(the same rules as the Security tab), formatted as
+`"<title> (<rule>, line N; <status>, <confidence> confidence)"`. The context
+analyzer no longer has its own security checks. Pass `include_security=False`
+to skip the analysis (the ML dataset builder and feature formatter do; ML
+features never use these strings).
 
 #### Public API
 
 | Function | Signature | Description |
 |---|---|---|
-| `analyze_context` | `(module_features, ast_tree, source_code="") -> ContextGraph` | Main entry: produces a `ContextGraph` from `ModuleFeatures`. |
+| `analyze_context` | `(module_features, ast_tree, source_code="", include_security=True) -> ContextGraph` | Main entry: produces a `ContextGraph` from `ModuleFeatures`. |
 | `compute_cyclomatic_complexity` | `(func_node_body) -> int` | Standalone complexity computation. |
 | `context_to_dict` | `(cg: ContextGraph) -> Dict` | Serialize `ContextGraph` to JSON-compatible dict. |
 
@@ -609,28 +610,44 @@ Inserts generated `CommentItem` objects back into the original source code.
 | `annotated_source` | `str` | The annotated source code |
 | `diff_log` | `List[str]` | Human-readable diff lines showing insertions |
 | `comments_attached` | `int` | Count of comments successfully inserted |
+| `line_map` | `Dict[int, int]` | Annotated line → original line (inserted lines are absent) |
+| `skipped` | `int` | Docstrings not inserted because the body starts on the `def` line |
+
+Helpers: `to_original_line(n)`, `to_annotated_line(n)`.
 
 #### Insertion Strategy
 
 | Comment Kind | Insertion Point | Indentation |
 |---|---|---|
-| `docstring` | **After** the `def`/`class` line (first line of body) | `col_offset + 4` spaces |
+| `docstring` | **Before the first body statement** (correct for multi-line signatures) | that statement's indentation |
 | `inline` / `block` | **Before** the `def`/`class` line | `col_offset` spaces |
+
+One-line bodies (`def f(): return 1`) are left unchanged and noted in `diff_log`.
+Earlier versions inserted docstrings directly after the `def` line, which
+produced invalid Python for multi-line signatures (regression test in
+`tests/test_location_integrity.py`).
 
 #### Algorithm
 
-1. Build an insertion map: `{0-indexed line → [lines to insert before]}`
-2. For docstrings: insert at `line_idx + 1` (after the def line)
-3. For inline comments: insert at `line_idx` (before the def line)
-4. Rebuild source by iterating through original lines and inserting at marked positions
+1. Parse the source to find each function/class body's first statement
+2. Build an insertion map: `{0-indexed line → [lines to insert before]}`
+3. Rebuild source by iterating through original lines, inserting at marked
+   positions and recording `line_map`
+
+Security analysis always runs on the original source; `line_map` translates
+between original and annotated line numbers.
 
 ---
 
 ### 5.9 security_analyzer
 
-**File**: `src/security_analyzer.py` (256 lines)
+**File**: `src/security_analyzer.py`
 
-Comprehensive security analysis of Python source code. Scans AST features and context for security anti-patterns.
+Adapter that keeps the `SecurityReport` / `SecurityIssue` interface used by the
+CLI pipeline and the GUI. All issues come from `src.security.analyze_source`
+(taint analysis + AST rules) run on the original source — see
+[SECURITY_ANALYSIS.md](SECURITY_ANALYSIS.md). Suppressed findings are kept in
+`SecurityReport.suppressed` and excluded from scores.
 
 #### Data Classes
 
@@ -641,8 +658,14 @@ Comprehensive security analysis of Python source code. Scans AST features and co
 | `severity` | `str` | `"critical"`, `"high"`, `"medium"`, or `"low"` |
 | `function_name` | `str` | Function where found |
 | `message` | `str` | Human-readable description |
-| `lineno` | `int` | Source line |
+| `lineno` | `int` | Source line of the sink / offending node (original file) |
 | `remediation` | `str` | Suggested fix |
+| `title`, `cwe` | `str` | Rule title and CWE id |
+| `confidence` | `str` | `high` / `medium` / `low` (see SECURITY_ANALYSIS.md §3) |
+| `status` | `str` | `confirmed` / `potential` |
+| `col` | `int` | Source column |
+| `trace` | `List[str]` | Evidence trace lines (`L<line> [<kind>] <text>`) |
+| `confidence_reasons` | `List[str]` | Factors that determined the confidence |
 
 **`SecurityReport`**:
 | Field | Type | Description |
@@ -651,7 +674,10 @@ Comprehensive security analysis of Python source code. Scans AST features and co
 | `module_safe_pct` | `float` | Percentage of functions scoring >= 80 |
 | `total_issues` | `int` | Total security issues found |
 | `by_severity` | `Dict[str, int]` | Issue count by severity |
-| `issues` | `List[SecurityIssue]` | All detected issues |
+| `issues` | `List[SecurityIssue]` | Active (non-suppressed) issues |
+| `suppressed` | `List[SecurityIssue]` | Suppressed issues with reasons |
+| `by_status` | `Dict[str, int]` | Counts by status |
+| `findings` | `List[Finding]` | Full `src.security` findings (schema in SECURITY_ANALYSIS.md) |
 
 #### Scoring
 
@@ -666,7 +692,8 @@ Comprehensive security analysis of Python source code. Scans AST features and co
 
 | Function | Signature | Description |
 |---|---|---|
-| `run_security_analysis` | `(module_features, context_graph, source_code) -> SecurityReport` | Run full security scan. |
+| `run_security_analysis` | `(module_features, context_graph=None, source_code="") -> SecurityReport` | Analyse the original source with `src.security`. |
+| `src.security.analyze_source` | `(source, filepath="<string>") -> SecurityFindings` | Standalone analysis (no comment generation, no ML). |
 
 ---
 
@@ -789,31 +816,38 @@ IRModule
 
 **File**: `src/ir/ir_builder.py`
 
-Lowers `ModuleFeatures` + `ContextGraph` into an `IRModule`.
+Returns one `IRFunction` per `FunctionFeature`, lowered from the real AST by
+`src/ir/lowering.py` (the tree recorded by `extract_features`).
 
-#### Lowering Algorithm per Function
+> The original builder synthesised blocks from loop/conditional *counts* with
+> placeholder operands and linked blocks before appending them (so branch
+> blocks had no predecessors). It was replaced because no downstream analysis
+> could be correct on that IR.
 
-1. **Entry block**: `LABEL` + one `LOAD` per parameter
-2. **Variable assignment block** (`vars`): `ASSIGN` for each tracked variable
-3. **Call block** (`calls`): `CALL` for each function call made
-4. **Loop blocks**: For each loop — `loop_N_header` (BRANCH) + `loop_N_body` (NOP + JUMP back) + `loop_N_after`
-5. **Branch blocks**: For each conditional — `branch_N_cond` (BRANCH) + `branch_N_true` + `branch_N_false` + `branch_N_join` (PHI)
-6. **Exit block**: `RETURN` instruction
+#### Lowering (`ir.lowering`)
 
-All blocks are linked with successor/predecessor edges. Back-edges are created for loop bodies.
-
-#### Internal Helpers
-
-| Class | Purpose |
+| Construct | IR |
 |---|---|
-| `_TempCounter` | Sequential temp name generator: `t0`, `t1`, `t2`, ... |
-| `_BlockBuilder` | Convenience wrapper for building a single `IRBlock` |
+| assignment / unpacking / augmented | `x = ASSIGN(t)`, `SUBSCR` per element, `x = BINOP(x, t)` |
+| attribute / subscript store | `STORE(value, base[, index])` |
+| expressions | `BINOP`, `UNOP`, `ATTR`, `SUBSCR`, `BUILD` (list/dict/f-string/comprehension), constants as `ASSIGN` with `meta.const` |
+| call | `CALL` with `CallInfo` (canonical callee after import-alias resolution, receiver, args, keywords, literal kwargs) |
+| `if`/`elif`/`else` | `BRANCH` (+ validation `Refinement`s) → `branch_N_true` / `branch_N_false` → `branch_N_join` |
+| `while` / `for` (+`else`) | `loop_N_header` (`BRANCH`) → `loop_N_body` (back-edge) → `loop_N_after`; `break`/`continue` jump to after/header |
+| `return` / `raise` / no-return calls | `__return__ = v`; jump to the single `exit` block |
+| `try`/`except`/`finally` | every try-body block has an edge to each handler |
+| nested `def` | `MAKEFUNC` with captured variables; lowered as `outer.inner` |
+
+Every instruction has `lineno`, `col`, `guards` (enclosing conditions) and a
+function-unique `uid`. Approximated constructs are listed in
+`IRFunction.unsupported`.
 
 #### Public API
 
 | Function | Signature | Description |
 |---|---|---|
-| `build_ir` | `(module_features, context_graph) -> IRModule` | Lower Week 7 analysis into IR. |
+| `build_ir` | `(module_features, context_graph=None, ast_tree=None, source_code=None) -> IRModule` | One IRFunction per FunctionFeature. |
+| `lower_module` | `(tree, source="", filepath="") -> IRModule` | All functions, methods, nested functions and the `<module>` body. |
 
 ---
 
@@ -836,11 +870,14 @@ Two output formats for `IRModule`:
 define int @add(a, b)  ; line 1, function
 {
 entry:
-  t0 = LOAD(a)
-  t1 = LOAD(b)
+  a = LOAD  ; kind=param
+  b = LOAD  ; kind=param
+  t0 = a Add b
+  __return__ = ASSIGN(t0)  ; kind=return
+  jump exit
+  ; successors: exit
 exit:
-  return t2
-  ; successors: 
+  return __return__
 }
 ```
 
@@ -922,10 +959,15 @@ IN[B]   = USE[B] ∪ (OUT[B] − DEF[B])
 
 Uses a backward worklist starting from reversed topological order.
 
-#### Post-Analysis Heuristics
+Definitions are `"<var>@<instruction uid>"`; non-parameter locals also get a
+pseudo-definition `"<var>@undef"` at entry. Both analyses use worklists with a
+convergence flag and an iteration cap.
 
-- **`unused_vars`**: Temporaries defined but never used as an operand anywhere in the function
-- **`used_before_assigned`**: Variables used as LOAD operands before any ASSIGN result in the entry block
+#### Derived Facts
+
+- **`unused_vars`**: user variables assigned but never read
+- **`dead_stores`**: `(var, line)` assignments whose value is never read afterwards
+- **`used_before_assigned`**: locals reached by `@undef` at a use (possibly unbound)
 
 #### DFAResult Data Class
 
@@ -934,8 +976,11 @@ Uses a backward worklist starting from reversed topological order.
 | `function_name` | `str` | Function name |
 | `reaching_defs` | `Dict[str, Set[str]]` | Map: block_label → reaching definition names |
 | `live_vars` | `Dict[str, Set[str]]` | Map: block_label → live variable names |
-| `used_before_assigned` | `List[str]` | Variables used before assignment |
-| `unused_vars` | `List[str]` | Variables defined but never used |
+| `used_before_assigned` | `List[str]` | Locals possibly read before assignment |
+| `unused_vars` | `List[str]` | User variables assigned but never read |
+| `dead_stores` | `List[Tuple[str, int]]` | Assignments never read afterwards |
+| `converged` / `iterations` | `bool` / `int` | Fixed point reached / worklist iterations |
+| `qualname` | `str` | Qualified function name |
 
 #### Public API
 
@@ -955,13 +1000,13 @@ Detects code-quality patterns/code smells from IR and DFA results.
 
 | Code | Pattern | Severity | Detection Logic |
 |---|---|---|---|
-| P001 | `unused_variable` | warning | Variable assigned but never read (from DFA) |
-| P002 | `high_complexity` | warning | >10 branch/loop IR blocks (implies very high cyclomatic complexity) |
-| P003 | `dead_block` | info | Block with no predecessors (unreachable code) |
-| P004 | `no_return_value` | info | Non-void function with RETURN that has no operand |
-| P005 | `deeply_nested_loops` | warning | >= 3 distinct loop_N_header blocks |
+| P001 | `unused_variable` | warning | User variable assigned but never read (loop targets excluded) |
+| P002 | `high_complexity` | warning | 1 + decision points in the IR > 10 |
+| P003 | `dead_block` | info | Block with real code unreachable from `entry` |
+| P004 | `no_return_value` | info | Annotated non-None function with a reachable implicit/bare return |
+| P005 | `deeply_nested_loops` | warning | Loop nesting depth ≥ 3 |
 | P006 | `excessive_calls` | info | >10 distinct callees |
-| P007 | `missing_param_load` | info | Parameter declared but no LOAD in entry block |
+| P007 | `unused_parameter` | info | Parameter never read (was `missing_param_load`, which could never fire) |
 
 #### Data Classes
 
@@ -1539,6 +1584,12 @@ python -m src.main --train
 | `--no-stdlib` | flag | off | Disable Python stdlib source |
 | `--output-dir` | str | `"outputs"` | Output directory for models/reports |
 | `--block-max-pairs` | int | 20000 | Max block-level training pairs |
+| `--security` | flag | off | Security analysis only (no comment generation/ML); exit 1 if any active finding |
+| `--security-report` | flag | off | Print full security findings with evidence traces after the run |
+| `--security-json` | str | — | Write security findings (full schema) as JSON |
+
+Standalone security CLI: `python -m src.security <file-or-dir> [--json] [--all] [--no-trace] [--min-confidence LEVEL] [--fail-on potential|confirmed]`.
+Evaluation: `python -m src.security.evaluate [--confirmed-only] [--granularity line|function] [--baseline OLD.py] [--json FILE]`.
 
 ### GUI Entry Point
 
@@ -1595,20 +1646,26 @@ source_code
 
 ## 13. Security Analysis Patterns
 
-| Code | Pattern | Severity | Detection |
-|---|---|---|---|
-| SEC001 | Dangerous builtin (`eval`/`exec`/`compile`) | critical | Call name in `_UNSAFE_BUILTINS` |
-| SEC002 | Shell injection (subprocess + `shell=True`) | critical | `subprocess` call + `shell=True` in body text |
-| SEC003 | Hardcoded secret | high | Variable named with `password`/`secret`/`token` + `str` type |
-| SEC004 | Weak cryptographic hash | medium | Call name in `_WEAK_CRYPTO` set |
-| SEC005 | SQL injection via string concatenation | high | Regex matching string concat + SQL keywords |
-| SEC006 | Bare `except:` clause | medium | `except:` without specific exception type |
-| SEC007 | Mutable default argument | low | `ast.List`/`ast.Dict`/`ast.Set` as default values |
-| SEC008 | assert in non-test code | low | `assert` keyword outside test functions |
-| SEC009 | Unsafe pickle deserialization | high | `pickle.load`/`pickle.loads`/`cPickle.load` |
-| SEC010 | Unsafe YAML deserialization | high | `yaml.load`/`yaml.unsafe_load` |
-| SEC011 | Insecure random number generator | medium | `random.randint`/`random.random`/etc. |
-| SEC012 | Hardcoded IP address | low | Regex matching IP address pattern |
+| Code | Title | CWE | Severity | Analysis |
+|---|---|---|---|---|
+| SEC001 | Code injection (`eval`/`exec`/`compile`) | CWE-95 | critical | taint (+ dangerous-API use) |
+| SEC002 | OS command injection | CWE-78 | critical | taint |
+| SEC003 | Hardcoded secret | CWE-798 | high | AST |
+| SEC004 | Weak cryptographic hash | CWE-328 | medium | AST |
+| SEC005 | SQL injection | CWE-89 | high | taint (+ SQL-construction heuristic) |
+| SEC006 | Bare `except:` | CWE-396 | medium | AST |
+| SEC007 | Mutable default argument | — | low | AST |
+| SEC008 | `assert` in non-test code | CWE-703 | low | AST |
+| SEC009 | Unsafe deserialization | CWE-502 | high | taint (+ dangerous-API use) |
+| SEC010 | Unsafe YAML load | CWE-502 | high | taint (+ dangerous-API use) |
+| SEC011 | Insecure randomness in a security context | CWE-338 | medium | AST |
+| SEC012 | Hardcoded IP address | CWE-1051 | low | AST |
+| SEC013 | Path traversal | CWE-22 | high | taint |
+| SEC014 | Cross-site scripting | CWE-79 | high | taint |
+| SEC015 | Server-side template injection | CWE-1336 | critical | taint |
+
+Sources, sinks, sanitizers, confidence derivation, evaluation results and
+limitations: [SECURITY_ANALYSIS.md](SECURITY_ANALYSIS.md).
 
 ---
 
@@ -1616,13 +1673,13 @@ source_code
 
 | Code | Pattern | Severity | Condition |
 |---|---|---|---|
-| P001 | Unused variable | warning | DFA: variable assigned but never used as operand |
-| P002 | High complexity | warning | >10 branch/loop IR blocks |
-| P003 | Dead block | info | Block with no predecessors (except entry) |
-| P004 | No return value | info | Non-void function RETURN with no operand |
-| P005 | Deeply nested loops | warning | >=3 loop header blocks |
+| P001 | Unused variable | warning | DFA: user variable assigned but never read (loop targets excluded) |
+| P002 | High complexity | warning | 1 + IR decision points > 10 |
+| P003 | Dead block | info | Block with real code unreachable from entry |
+| P004 | No return value | info | Annotated non-None function can return None |
+| P005 | Deeply nested loops | warning | Loop nesting depth ≥ 3 |
 | P006 | Excessive calls | info | >10 distinct callees |
-| P007 | Missing parameter load | info | Param declared but no LOAD in entry block |
+| P007 | Unused parameter | info | Parameter never read |
 
 ---
 
@@ -1637,6 +1694,10 @@ source_code
 | `test_ir.py` | `TestIRNodes`, `TestIRBuilder`, `TestIRSerializer` | IR nodes, builder, JSON/text serialization |
 | `test_analysis.py` | `TestCFGBuilder`, `TestDFAEngine`, `TestPatternDetector` | CFG structure, DFA results, pattern findings |
 | `test_ast_nlp_model.py` | `test_clean_docstring`, `test_ast_feature_formatter`, `test_dataset_builder_offline`, `test_ast_comment_model_generate` | ML pipeline components |
+| `test_ir_semantics.py` | `TestLowering`, `TestCFGShape`, `TestDataFlow`, `TestPatternRegressions` | Real-AST lowering, CFG edges, reaching defs/liveness, P001/P003/P004/P005/P007 regressions |
+| `test_security_taint.py` | flows, sanitizer contexts, interprocedural, confidence, suppression, legacy adapter | Taint engine and finding schema |
+| `test_security_eval.py` | metric formulas, scoring rules, pinned fixture results | Evaluation methodology |
+| `test_location_integrity.py` | original-line mapping, behaviour preservation, input file untouched | Comment generation vs. security locations |
 
 ### Running Tests
 
@@ -1658,6 +1719,7 @@ python -m unittest tests.test_basic -v
 | `tests/inputs/complex_sample.py` | Complex code with loops, branches, classes |
 | `tests/inputs/test_security.py` | Code with security anti-patterns |
 | `tests/inputs/demo_showcase.py` | Demo code for showcase |
+| `tests/security_fixtures/*.py` | Labelled vulnerable/secure programs for the security evaluation (see its README) |
 
 ---
 
@@ -1768,19 +1830,47 @@ outputs/
 
 ### Installation
 
+> **Python 3.11 or 3.12 is required for the ML extras.** PyTorch ships no wheels
+> for Python 3.14, so `pip install torch` fails there. The rule-based engine runs
+> on any Python >= 3.10.
+
+All pinned dependencies live in `requirements.txt` at the repository root.
+
 ```bash
-# Core only
-pip install ast  # (standard library — no install needed)
+# 1. Virtual environment on a supported interpreter
+py -3.12 -m venv .venv
 
-# ML support
-pip install transformers torch sentencepiece datasets nltk numpy
+# 2a. NVIDIA GPU: install the CUDA build of torch first
+.venv/Scripts/python.exe -m pip install torch --index-url https://download.pytorch.org/whl/cu121
 
-# GUI support
-pip install PyQt6
-
-# All at once
-pip install transformers torch sentencepiece datasets nltk numpy PyQt6
+# 2b. Everything else (CPU-only users can skip straight to this line)
+.venv/Scripts/python.exe -m pip install -r requirements.txt
 ```
+
+### A fresh clone has no trained model
+
+`.gitignore` excludes `outputs/model/`, so the fine-tuned checkpoint is **not**
+distributed with the source. `load_ast_model()` returns `None` when
+`outputs/model/ast_model/config.json` is absent, and the CLI exits with code 2 and
+a "train first" message. Train once per clone:
+
+```bash
+python -m src.main --train --quick     # minutes — pipeline check
+python -m src.main --train             # full run
+```
+
+### Artifact locations
+
+Every path resolves through `src/config.py` against the repository root, not the
+current working directory, so the CLI and the GUI always agree:
+
+| Constant | Path |
+|---|---|
+| `OUTPUT_DIR` | `outputs/` |
+| `AST_MODEL_DIR` | `outputs/model/ast_model/` |
+| `TRAINING_REPORT` | `outputs/training_report.json` |
+| `EVAL_REPORT` | `outputs/eval_report.json` |
+| `DATASET_JSON` | `outputs/ast_train_dataset.json` |
 
 ---
 

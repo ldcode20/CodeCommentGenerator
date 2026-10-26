@@ -196,10 +196,37 @@ def _complexity_label(cc: int) -> str:
         return "very_complex"
 
 
+def _security_messages(module_features: ModuleFeatures, source_code: str) -> Dict[Tuple[str, int], List[str]]:
+    """
+    Per-function security warnings from the central analyzer (src.security).
+
+    The rules live in one place; this only formats non-suppressed findings for
+    docstring "Security Warnings" sections.  Keyed by (function name, def line).
+    """
+    from .security import analyze_source   # lazy: avoids an import cycle via src.ir
+
+    report = analyze_source(source_code, module_features.filepath or "<string>", use_cache=True)
+    spans = [(ff.name, ff.lineno, ff.lineno + ff.body_lines) for ff in module_features.functions]
+    out: Dict[Tuple[str, int], List[str]] = {}
+    for f in report.active():
+        owner = None
+        for name, start, end in spans:
+            if start <= f.line <= end and (owner is None or start >= owner[1]):
+                owner = (name, start)
+        if owner is None:
+            continue
+        msg = f"{f.title} ({f.rule_id}, line {f.line}; {f.status}, {f.confidence} confidence)"
+        out.setdefault(owner, [])
+        if msg not in out[owner]:
+            out[owner].append(msg)
+    return out
+
+
 def analyze_context(
     module_features: ModuleFeatures,
     ast_tree: ast.AST,
-    source_code: str = ""
+    source_code: str = "",
+    include_security: bool = True,
 ) -> ContextGraph:
     """
     Analyze a ModuleFeatures object and produce a ContextGraph.
@@ -207,16 +234,26 @@ def analyze_context(
     Args:
         module_features: Output of ast_extractor.extract_features()
         ast_tree: The original parsed AST (for walking function bodies)
-        source_code: Raw source string (used for security pattern detection)
+        source_code: Raw source string (used for security analysis)
+        include_security: Run the central security analyzer to fill
+            ``FunctionContext.security_issues``.  Bulk callers (ML dataset
+            building) pass False; the ML features never use these strings.
 
     Returns:
         ContextGraph with per-function contexts, call graph, and security issues
     """
-    # Build a map: function name -> AST FunctionDef node
-    func_nodes: Dict[str, ast.FunctionDef] = {}
+    # Map (name, def line) -> AST node; names alone collide for methods in different classes.
+    func_nodes: Dict[Tuple[str, int], ast.FunctionDef] = {}
     for node in ast.walk(ast_tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            func_nodes[node.name] = node
+            func_nodes[(node.name, node.lineno)] = node
+
+    security_by_func: Dict[Tuple[str, int], List[str]] = {}
+    if include_security and source_code:
+        try:
+            security_by_func = _security_messages(module_features, source_code)
+        except Exception:
+            security_by_func = {}
 
     module_func_names: Set[str] = {f.name for f in module_features.functions}
     cg = ContextGraph(
@@ -226,7 +263,7 @@ def analyze_context(
 
     for ff in module_features.functions:
         # Retrieve AST node for this function
-        ast_node = func_nodes.get(ff.name)
+        ast_node = func_nodes.get((ff.name, ff.lineno))
         if ast_node is None:
             continue
 
@@ -243,26 +280,8 @@ def analyze_context(
         internal_calls = [c for c in ff.calls_made if c.split('.')[0] in module_func_names and c != ff.name]
         external_calls = [c for c in ff.calls_made if c.split('.')[0] not in module_func_names]
 
-        # Basic Security Analysis
-        security_issues = []
-        source_lines = source_code.splitlines() if source_code else []
-        for call in ff.calls_made:
-            if call in ("eval", "exec", "compile"):
-                security_issues.append(f"Uses dangerous builtin '{call}'")
-            elif "subprocess" in call:
-                body_lines = source_lines[ff.lineno - 1:ff.lineno + ff.body_lines]
-                body_text = "\n".join(body_lines)
-                if "shell=True" in body_text:
-                    security_issues.append("Potential shell injection risk (subprocess with shell=True)")
-            elif "md5" in call or "sha1" in call:
-                security_issues.append(f"Uses weak cryptographic hash function '{call}'")
-
-        # Basic heuristic for hardcoded passwords (very simple check on variable assignments)
-        for v in variables:
-            low_name = v.name.lower()
-            if "password" in low_name or "secret" in low_name or "token" in low_name:
-                if v.inferred_type == "str":
-                    security_issues.append(f"Potential hardcoded secret assigned to '{v.name}'")
+        # Security warnings come from the central analyzer (src/security).
+        security_issues = list(security_by_func.get((ff.name, ff.lineno), []))
 
         fc = FunctionContext(
             node_id=ff.node_id,

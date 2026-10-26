@@ -25,6 +25,16 @@ Opcodes (IROpcode)
   LABEL    label L              Block-header label
   PHI      t0 = phi(t1, t2)    SSA phi node (placed at join points)
   NOP      nop                  No-operation placeholder
+  ATTR     t0 = base.attr       Attribute read
+  SUBSCR   t0 = base[index]     Subscript read
+  BUILD    t0 = build(a, b…)    Container / f-string / comprehension construction
+  MAKEFUNC f = makefunc(free…)  Nested function definition capturing free vars
+
+Variables vs temporaries
+------------------------
+User variables keep their source names (``query``); compiler temporaries are
+``tN``.  Every instruction carries the line/column of the AST node it was
+lowered from, so analyses can report original source locations.
 """
 from __future__ import annotations
 
@@ -51,6 +61,59 @@ class IROpcode(str, enum.Enum):
     LABEL   = "LABEL"
     PHI     = "PHI"
     NOP     = "NOP"
+    ATTR    = "ATTR"
+    SUBSCR  = "SUBSCR"
+    BUILD   = "BUILD"
+    MAKEFUNC = "MAKEFUNC"
+
+
+# ---------------------------------------------------------------------------
+# Structured call / branch metadata
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CallInfo:
+    """
+    Structured description of a call site.
+
+    Attributes:
+        callee       : Canonical dotted name after import-alias resolution
+                       (``subprocess.run``), or ``""`` for a method call on a
+                       local value whose type is unknown.
+        raw_callee   : The callee expression as written (``sp.run``).
+        method       : Method name for ``obj.method(...)`` calls.
+        receiver     : Operand holding the receiver of a method call.
+        args         : Positional argument operands, in order.
+        keywords     : Keyword name -> operand.
+        const_kwargs : Keyword name -> ``repr`` of a literal keyword value
+                       (lets rules see ``shell=True`` or ``Loader=SafeLoader``).
+        star_args    : Operands passed via ``*args`` / ``**kwargs``.
+    """
+    callee: str = ""
+    raw_callee: str = ""
+    method: Optional[str] = None
+    receiver: Optional[str] = None
+    args: List[str] = field(default_factory=list)
+    keywords: Dict[str, str] = field(default_factory=dict)
+    const_kwargs: Dict[str, str] = field(default_factory=dict)
+    star_args: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class Refinement:
+    """
+    A validation fact implied by a branch condition.
+
+    ``var`` is known to satisfy ``kind`` on the edge selected by ``on_true``
+    (True = the condition's true successor).  Kinds:
+
+      allowlist   — membership test against a constant collection
+      charset     — str.isdigit()/isalnum()/re.fullmatch(<safe charset>)/isinstance
+      path_prefix — startswith / is_relative_to / commonpath boundary check
+    """
+    var: str
+    kind: str
+    on_true: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -68,12 +131,24 @@ class IRInstruction:
         operands : Source operands (variable names, temporaries, or literals).
         lineno   : Source line number that generated this instruction (0 = unknown).
         meta     : Free-form metadata dict (operator, callee name, etc.).
+        col      : Source column of the originating AST node.
+        end_lineno : Last source line of the originating AST node.
+        call     : CallInfo for CALL instructions.
+        refinements : Validation facts for BRANCH instructions.
+        guards   : Enclosing branch conditions, outermost first.
+        uid      : Function-unique instruction id (stable across runs).
     """
     op: IROpcode
     result: Optional[str] = None
     operands: List[str] = field(default_factory=list)
     lineno: int = 0
     meta: Dict[str, str] = field(default_factory=dict)
+    col: int = 0
+    end_lineno: int = 0
+    call: Optional[CallInfo] = None
+    refinements: List[Refinement] = field(default_factory=list)
+    guards: List[str] = field(default_factory=list)
+    uid: int = 0
 
     def __repr__(self) -> str:
         lhs = f"{self.result} = " if self.result else ""
@@ -97,11 +172,13 @@ class IRBlock:
         instructions : Ordered list of IRInstruction in this block.
         successors   : Labels of basic blocks that may follow this one.
         predecessors : Labels of basic blocks that may precede this one.
+        meta         : Block facts such as ``loop_depth`` or ``kind``.
     """
     label: str
     instructions: List[IRInstruction] = field(default_factory=list)
     successors: List[str] = field(default_factory=list)
     predecessors: List[str] = field(default_factory=list)
+    meta: Dict[str, str] = field(default_factory=dict)
 
     # ── Convenience accessors ────────────────────────────────────────
 
@@ -138,6 +215,13 @@ class IRFunction:
         is_async    : True if declared ``async def``.
         blocks      : Ordered list of IRBlock; blocks[0] is always the entry block.
         source_lineno: Line number in the original source.
+        qualname    : Dotted qualified name (``Cls.method``, ``outer.inner``).
+        class_name  : Enclosing class, if any.
+        decorators  : Decorator expressions as written.
+        locals      : Names bound inside the function body.
+        free_vars   : Names read but not bound locally (closure / global).
+        unsupported : Language features lowered only approximately.
+        end_lineno  : Last source line of the function.
     """
     name: str
     params: List[str] = field(default_factory=list)
@@ -146,6 +230,14 @@ class IRFunction:
     is_async: bool = False
     blocks: List[IRBlock] = field(default_factory=list)
     source_lineno: int = 0
+    qualname: str = ""
+    class_name: Optional[str] = None
+    decorators: List[str] = field(default_factory=list)
+    locals: Set[str] = field(default_factory=set)
+    free_vars: Set[str] = field(default_factory=set)
+    unsupported: List[str] = field(default_factory=list)
+    end_lineno: int = 0
+    enclosing: Optional[str] = None
 
     # ── Convenience ──────────────────────────────────────────────────
 
@@ -180,13 +272,20 @@ class IRModule:
     Attributes:
         source_file : Path / name of the original source file.
         functions   : List of IRFunction objects (module-level + methods).
+        imports     : Local alias -> canonical dotted name.
+        module_body : Pseudo-function holding top-level statements, if lowered.
     """
     source_file: str = ""
     functions: List[IRFunction] = field(default_factory=list)
+    imports: Dict[str, str] = field(default_factory=dict)
+    module_body: Optional[IRFunction] = None
 
     def get_function(self, name: str) -> Optional[IRFunction]:
         for f in self.functions:
             if f.name == name:
+                return f
+        for f in self.functions:
+            if f.qualname == name:
                 return f
         return None
 

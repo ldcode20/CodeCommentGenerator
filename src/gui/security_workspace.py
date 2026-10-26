@@ -66,8 +66,9 @@ class SecurityWorkspace(QWidget):
         layout.addWidget(issues_label)
 
         self.table = QTableWidget()
-        self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(["Severity", "Pattern", "Function", "Line", "Message / Remediation"])
+        self.table.setColumnCount(6)
+        self.table.setHorizontalHeaderLabels(["Severity", "Rule", "Function", "Line",
+                                              "Status / Confidence", "Message / Remediation"])
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -127,12 +128,30 @@ class SecurityWorkspace(QWidget):
                 sev_colors = {"critical": "#dc2626", "high": "#ea580c", "medium": "#ca8a04", "low": "#2563eb"}
                 sev_item.setForeground(QBrush(QColor(sev_colors.get(issue.severity, "#6b7280"))))
                 self.table.setItem(i, 0, sev_item)
-                self.table.setItem(i, 1, QTableWidgetItem(issue.pattern_id))
+                rule_text = issue.pattern_id + (f" ({issue.cwe})" if getattr(issue, "cwe", None) else "")
+                self.table.setItem(i, 1, QTableWidgetItem(rule_text))
                 self.table.setItem(i, 2, QTableWidgetItem(issue.function_name))
                 self.table.setItem(i, 3, QTableWidgetItem(str(issue.lineno)))
+                status = getattr(issue, "status", "")
+                confidence = getattr(issue, "confidence", "")
+                self.table.setItem(i, 4, QTableWidgetItem(
+                    f"{status} / {confidence}" if status else ""))
                 msg = issue.message
                 if issue.remediation:
                     msg += f" | Fix: {issue.remediation}"
-                self.table.setItem(i, 4, QTableWidgetItem(msg))
+                msg_item = QTableWidgetItem(msg)
+                tip = []
+                if getattr(issue, "trace", None):
+                    tip.append("Evidence (original source lines):")
+                    tip.extend("  " + t for t in issue.trace)
+                if getattr(issue, "confidence_reasons", None):
+                    tip.append("Confidence: " + "; ".join(issue.confidence_reasons))
+                if tip:
+                    tooltip = "\n".join(tip)
+                    for col in range(6):
+                        item = self.table.item(i, col) if col != 5 else msg_item
+                        if item is not None:
+                            item.setToolTip(tooltip)
+                self.table.setItem(i, 5, msg_item)
         self.table.resizeColumnsToContents()
         self.table.horizontalHeader().setStretchLastSection(True)

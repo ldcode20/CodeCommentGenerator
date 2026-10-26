@@ -197,11 +197,32 @@ class TestPatternDetector(unittest.TestCase):
         report = detect_patterns(ir_module, dfas)
         self.assertIsInstance(report.summary, dict)
 
-    def test_complex_code_has_findings(self):
-        """Complex binary_search (loops + branches) should trigger at least one pattern."""
+    def test_complex_code_has_no_spurious_findings(self):
+        """
+        binary_search has no dead code, unused variables or unused parameters.
+
+        This test used to assert *at least one* finding: the old count-based IR
+        produced unused temporaries (P001) and condition blocks without
+        predecessors (P003) for every function.  With IR lowered from the real
+        AST those artefacts are gone (intentional behaviour change).
+        """
         ir_module, _, dfas = _build_all(COMPLEX_CODE)
         report = detect_patterns(ir_module, dfas)
-        self.assertGreater(len(report.findings), 0)
+        self.assertEqual(report.findings, [])
+
+    def test_real_smells_are_detected(self):
+        code = (
+            "def f(a, unused) -> int:\n"
+            "    tmp = 1\n"
+            "    if a:\n"
+            "        return 2\n"
+            "    print(a)\n"
+        )
+        ir_module, _, dfas = _build_all(code)
+        ids = {f.pattern_id for f in detect_patterns(ir_module, dfas).findings}
+        self.assertIn("P001", ids)   # tmp never read
+        self.assertIn("P004", ids)   # falls off the end of an int function
+        self.assertIn("P007", ids)   # 'unused' never read
 
     def test_findings_have_required_fields(self):
         ir_module, _, dfas = _build_all(COMPLEX_CODE)

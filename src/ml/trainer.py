@@ -18,8 +18,10 @@ import pathlib
 import random
 from typing import List, Optional
 
+from ..config import resolve_output_dir
 from .ast_dataset_builder import (
-    build_full_dataset, save_dataset, ASTTrainPair, build_stdlib_dataset
+    build_full_dataset, save_dataset, ASTTrainPair, build_stdlib_dataset,
+    load_dataset_from_json,
 )
 from .evaluator import compute_bleu, compute_rouge, compute_exact_match, EvalReport
 
@@ -79,7 +81,8 @@ def _evaluate_model(model, test_pairs: List[ASTTrainPair], cap: int = 200) -> di
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def train_and_evaluate(
-    output_dir: str = "outputs",
+    output_dir: Optional[str] = None,
+    dataset_json: Optional[str] = None,
     include_codesearchnet: bool = True,
     include_stdlib: bool = True,
     codesearchnet_max: int = 20_000,
@@ -99,7 +102,12 @@ def train_and_evaluate(
     the structured AST extraction.
 
     Args:
-        output_dir:            Directory to save model + reports.
+        output_dir:            Directory to save model + reports. ``None``
+                               means the project default (``outputs/``);
+                               a relative path is resolved against the
+                               project root, never the working directory.
+        dataset_json:          Reuse a previously saved corpus instead of
+                               rebuilding it (skips the HF download).
         include_codesearchnet: Download CodeSearchNet from HuggingFace.
         include_stdlib:        Crawl Python stdlib as offline supplement.
         codesearchnet_max:     Max samples from CodeSearchNet.
@@ -114,24 +122,28 @@ def train_and_evaluate(
     Returns:
         dict with ``training_report`` and ``eval_report``.
     """
-    model_dir = pathlib.Path(output_dir) / "model" / "ast_model"
-    model_dir.mkdir(parents=True, exist_ok=True)
-    out_dir   = pathlib.Path(output_dir)
+    out_dir   = resolve_output_dir(output_dir)
+    model_dir = out_dir / "model" / "ast_model"
     out_dir.mkdir(parents=True, exist_ok=True)
+    model_dir.mkdir(parents=True, exist_ok=True)
 
     def _log(msg):
         if verbose:
             print(f"  [trainer] {msg}")
 
     # ── 1. Build dataset ──────────────────────────────────────────────────────
-    _log("Building AST feature dataset …")
-    pairs = build_full_dataset(
-        include_codesearchnet=include_codesearchnet,
-        include_stdlib=include_stdlib,
-        codesearchnet_max=codesearchnet_max,
-        max_stdlib_files=max_stdlib_files,
-        verbose=verbose,
-    )
+    if dataset_json and pathlib.Path(dataset_json).exists():
+        _log(f"Reusing saved corpus → {dataset_json}")
+        pairs = load_dataset_from_json(dataset_json)
+    else:
+        _log("Building AST feature dataset …")
+        pairs = build_full_dataset(
+            include_codesearchnet=include_codesearchnet,
+            include_stdlib=include_stdlib,
+            codesearchnet_max=codesearchnet_max,
+            max_stdlib_files=max_stdlib_files,
+            verbose=verbose,
+        )
 
     if len(pairs) < 10:
         # Absolute fallback: use stdlib only (always offline-available)
@@ -144,7 +156,7 @@ def train_and_evaluate(
     _log(f"Total dataset size: {len(pairs)} pairs")
 
     # Save for inspection
-    corpus_info = save_dataset(pairs, output_dir=output_dir)
+    corpus_info = save_dataset(pairs, output_dir=str(out_dir))
     _log(f"Dataset saved → {corpus_info['json_path']}")
 
     train_pairs, test_pairs = _split(pairs, test_ratio=test_ratio)
@@ -233,18 +245,27 @@ def train_and_evaluate(
         json.dump(training_report, f, indent=2)
     with open(out_dir / "eval_report.json", "w") as f:
         json.dump(full_eval_report, f, indent=2)
-    _log(f"Reports saved → {output_dir}/")
+    _log(f"Reports saved → {out_dir}/")
 
     return {"training_report": training_report, "eval_report": full_eval_report}
 
 
-def load_ast_model(output_dir: str = "outputs") -> Optional["ASTCommentModel"]:
+def load_ast_model(output_dir: Optional[str] = None) -> Optional["ASTCommentModel"]:
     """
-    Load the saved ASTCommentModel. Returns None if transformers unavailable
-    or if no saved model exists yet.
+    Load the saved ASTCommentModel.
+
+    Args:
+        output_dir: ``None`` for the project default (``outputs/``). Relative
+                    paths resolve against the project root so the CLI and the
+                    GUI always agree on where the checkpoint lives.
+
+    Returns:
+        The loaded model, or None if transformers is unavailable or no
+        checkpoint has been trained yet.
     """
-    model_path = pathlib.Path(output_dir) / "model" / "ast_model"
-    if not model_path.exists():
+    model_path = resolve_output_dir(output_dir) / "model" / "ast_model"
+    # An empty directory (e.g. created by a crashed run) is not a model.
+    if not model_path.exists() or not (model_path / "config.json").exists():
         return None
     try:
         from .ast_comment_model import ASTCommentModel

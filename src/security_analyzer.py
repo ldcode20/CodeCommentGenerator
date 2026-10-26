@@ -1,10 +1,20 @@
-import ast
-import re
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set
+"""
+Security report adapter
+========================
+Keeps the ``SecurityReport`` / ``SecurityIssue`` interface used by the CLI
+pipeline and the GUI, but every issue now comes from the central analyzer in
+``src/security`` (taint analysis over the real IR + AST pattern rules).
 
-from .ast_extractor import ModuleFeatures, FunctionFeature
-from .context_analyzer import FunctionContext, VariableInfo
+The original implementation matched regexes against function source text and
+reported every issue on the function's ``def`` line; it is superseded by
+``src.security.analyze_source``.  Rule IDs SEC001–SEC012 are unchanged;
+SEC013 (path traversal), SEC014 (XSS) and SEC015 (template injection) are new.
+"""
+import os
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
+
+from .ast_extractor import ModuleFeatures
 
 
 @dataclass
@@ -15,6 +25,14 @@ class SecurityIssue:
     message: str
     lineno: int = 0
     remediation: str = ""
+    # Added by the taint-based analyzer (defaults keep old constructors working)
+    title: str = ""
+    cwe: Optional[str] = None
+    confidence: str = ""
+    status: str = ""
+    col: int = 0
+    trace: List[str] = field(default_factory=list)
+    confidence_reasons: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -24,6 +42,10 @@ class SecurityReport:
     total_issues: int = 0
     by_severity: Dict[str, int] = field(default_factory=dict)
     issues: List[SecurityIssue] = field(default_factory=list)
+    suppressed: List[SecurityIssue] = field(default_factory=list)
+    by_status: Dict[str, int] = field(default_factory=dict)
+    findings: list = field(default_factory=list)       # full src.security Finding objects
+    parse_error: Optional[str] = None
 
     def add_issue(self, issue: SecurityIssue):
         self.issues.append(issue)
@@ -31,6 +53,8 @@ class SecurityReport:
         self.by_severity[issue.severity] = self.by_severity.get(issue.severity, 0) + 1
 
     def compute_function_score(self, func_name: str, issues: List[SecurityIssue]) -> float:
+        # Severity-weighted as before; potential findings are not discounted, so an
+        # unverified critical issue still marks the function as unsafe.
         weights = {"critical": 30, "high": 15, "medium": 5, "low": 1}
         penalty = sum(weights.get(i.severity, 0) for i in issues)
         return max(0.0, min(100.0, 100.0 - penalty))
@@ -42,215 +66,84 @@ class SecurityReport:
         return round(100.0 * safe_count / len(all_scores), 1)
 
     def to_dict(self) -> dict:
+        def issue_dict(i: SecurityIssue) -> dict:
+            return {
+                "pattern_id": i.pattern_id,
+                "severity": i.severity,
+                "function_name": i.function_name,
+                "message": i.message,
+                "lineno": i.lineno,
+                "col": i.col,
+                "remediation": i.remediation,
+                "title": i.title,
+                "cwe": i.cwe,
+                "confidence": i.confidence,
+                "status": i.status,
+                "trace": i.trace,
+            }
         return {
             "function_scores": self.function_scores,
             "module_safe_pct": self.module_safe_pct,
             "total_issues": self.total_issues,
             "by_severity": self.by_severity,
-            "issues": [
-                {
-                    "pattern_id": i.pattern_id,
-                    "severity": i.severity,
-                    "function_name": i.function_name,
-                    "message": i.message,
-                    "lineno": i.lineno,
-                    "remediation": i.remediation,
-                }
-                for i in self.issues
-            ],
+            "by_status": self.by_status,
+            "issues": [issue_dict(i) for i in self.issues],
+            "suppressed": [issue_dict(i) for i in self.suppressed],
+            "parse_error": self.parse_error,
         }
 
 
-_UNSAFE_BUILTINS = {"eval", "exec", "compile"}
-_WEAK_CRYPTO = {"hashlib.md5", "hashlib.sha1", "md5", "sha1", "MD5", "SHA1",
-                "Crypto.Hash.MD5", "Crypto.Hash.SHA"}
-_SQL_CONCAT_PATTERNS = [
-    re.compile(r'["\'].*\+.*["\']', re.IGNORECASE),
-    re.compile(r'f["\'].*\{.*\}.*SELECT', re.IGNORECASE),
-]
-_DANGEROUS_DESERIALIZE = {"pickle.load", "pickle.loads", "cPickle.load",
-                          "yaml.load", "yaml.unsafe_load"}
-_INSECURE_RANDOM = {"random.randint", "random.random", "random.choice",
-                    "random.randrange", "random.shuffle"}
-_HARDCODED_SECRET_NAMES = {
-    "password", "passwd", "secret", "token", "api_key", "apikey",
-    "access_key", "private_key", "auth_key", "credentials",
-}
-_MUTABLE_DEFAULTS = {"list", "dict", "set"}
-_HARD_CODED_IP = re.compile(r'(?<!\w)(?:\d{1,3}\.){3}\d{1,3}(?!\w)')
-_HARD_CODED_URL = re.compile(r'https?://[^\s"\']+')
+def _to_issue(f) -> SecurityIssue:
+    short = f.function.rsplit(".", 1)[-1]
+    return SecurityIssue(
+        pattern_id=f.rule_id, severity=f.severity, function_name=short,
+        message=f"{f.message} [{f.status}, {f.confidence} confidence]",
+        lineno=f.line, remediation=f.remediation, title=f.title, cwe=f.cwe,
+        confidence=f.confidence, status=f.status, col=f.col,
+        trace=[f"L{s['line']} [{s['kind']}] {s['text']}" for s in f.trace],
+        confidence_reasons=list(f.confidence_reasons),
+    )
 
 
 def run_security_analysis(
     module_features: ModuleFeatures,
-    context_graph,
+    context_graph=None,
     source_code: str = "",
 ) -> SecurityReport:
     """
-    Comprehensive security analysis of Python source code.
+    Run the central security analyzer on the original source.
 
-    Scans AST features and context for security anti-patterns,
-    producing a SecurityReport with per-function scores and module safety %.
+    ``context_graph`` is accepted for API compatibility; the analysis works
+    from the source itself and never from generated comments.  Function scores
+    are keyed by function name as before.
     """
-    report = SecurityReport()
-    fc_map: Dict[str, FunctionContext] = {
-        fc.name: fc for fc in context_graph.function_contexts
-    }
+    from .security import analyze_source
 
-    source_lines = source_code.splitlines() if source_code else []
+    if not source_code and module_features.filepath and os.path.isfile(module_features.filepath):
+        with open(module_features.filepath, encoding="utf-8") as fh:
+            source_code = fh.read()
 
-    for ff in module_features.functions:
-        fc = fc_map.get(ff.name)
-        func_issues: List[SecurityIssue] = []
+    result = analyze_source(source_code or "", module_features.filepath or "<string>",
+                            use_cache=True)
+    report = SecurityReport(findings=result.findings, by_status=result.by_status(),
+                            parse_error=result.parse_error)
 
-        for call in ff.calls_made:
-            base_call = call.split("(")[0].split(".")[-1] if "." in call else call
-            if base_call in _UNSAFE_BUILTINS or call in _UNSAFE_BUILTINS:
-                func_issues.append(SecurityIssue(
-                    pattern_id="SEC001",
-                    severity="critical",
-                    function_name=ff.name,
-                    message=f"Uses dangerous builtin '{call}' — allows arbitrary code execution.",
-                    lineno=ff.lineno,
-                    remediation="Replace with ast.literal_eval() or a safe parser.",
-                ))
+    per_func: Dict[str, List[SecurityIssue]] = {ff.name: [] for ff in module_features.functions}
+    spans = [(ff.name, ff.lineno, ff.lineno + ff.body_lines) for ff in module_features.functions]
+    for f in result.findings:
+        issue = _to_issue(f)
+        if f.status == "suppressed":
+            report.suppressed.append(issue)
+            continue
+        report.add_issue(issue)
+        owner = None
+        for name, start, end in spans:
+            if start <= f.line <= end and (owner is None or start >= owner[1]):
+                owner = (name, start)
+        if owner is not None:
+            per_func[owner[0]].append(issue)
 
-            if "subprocess" in call:
-                body = source_lines[ff.lineno - 1:ff.lineno + ff.body_lines]
-                body_text = "\n".join(body)
-                if "shell=True" in body_text:
-                    func_issues.append(SecurityIssue(
-                        pattern_id="SEC002",
-                        severity="critical",
-                        function_name=ff.name,
-                        message="Potential shell injection via subprocess with shell=True.",
-                        lineno=ff.lineno,
-                        remediation="Use subprocess without shell=True; pass args as a list.",
-                    ))
-
-            for weak in _WEAK_CRYPTO:
-                if weak in call:
-                    func_issues.append(SecurityIssue(
-                        pattern_id="SEC004",
-                        severity="medium",
-                        function_name=ff.name,
-                        message=f"Uses weak cryptographic hash '{call}'.",
-                        lineno=ff.lineno,
-                        remediation="Use SHA-256 or stronger from hashlib.",
-                    ))
-                    break
-
-            for danger in _DANGEROUS_DESERIALIZE:
-                if danger in call:
-                    sev = "high"
-                    func_issues.append(SecurityIssue(
-                        pattern_id="SEC009" if "pickle" in danger else "SEC010",
-                        severity=sev,
-                        function_name=ff.name,
-                        message=f"Uses unsafe deserialization '{call}' — may execute arbitrary code.",
-                        lineno=ff.lineno,
-                        remediation="Use json.loads() or yaml.safe_load() instead.",
-                    ))
-                    break
-
-            for rng in _INSECURE_RANDOM:
-                if rng in call:
-                    func_issues.append(SecurityIssue(
-                        pattern_id="SEC011",
-                        severity="medium",
-                        function_name=ff.name,
-                        message=f"Uses insecure random '{call}' — not suitable for cryptography.",
-                        lineno=ff.lineno,
-                        remediation="Use secrets module for security-sensitive randomness.",
-                    ))
-                    break
-
-        if fc:
-            for vi in fc.variables:
-                low_name = vi.name.lower()
-                if any(kw in low_name for kw in _HARDCODED_SECRET_NAMES):
-                    if vi.inferred_type == "str":
-                        func_issues.append(SecurityIssue(
-                            pattern_id="SEC003",
-                            severity="high",
-                            function_name=ff.name,
-                            message=f"Potential hardcoded secret in variable '{vi.name}'.",
-                            lineno=vi.assigned_at[0] if vi.assigned_at else ff.lineno,
-                            remediation="Load secrets from environment variables or a vault.",
-                        ))
-
-        if source_code:
-            func_src = "\n".join(source_lines[ff.lineno - 1:ff.lineno + ff.body_lines])
-
-            for pattern in _SQL_CONCAT_PATTERNS:
-                if pattern.search(func_src) and ("SELECT" in func_src.upper() or "INSERT" in func_src.upper()):
-                    func_issues.append(SecurityIssue(
-                        pattern_id="SEC005",
-                        severity="high",
-                        function_name=ff.name,
-                        message="Potential SQL injection via string concatenation.",
-                        lineno=ff.lineno,
-                        remediation="Use parameterized queries with placeholders.",
-                    ))
-                    break
-
-            if re.search(r'\bexcept\s*:', func_src):
-                func_issues.append(SecurityIssue(
-                    pattern_id="SEC006",
-                    severity="medium",
-                    function_name=ff.name,
-                    message="Bare 'except:' clause catches all exceptions including SystemExit and KeyboardInterrupt.",
-                    lineno=ff.lineno,
-                    remediation="Catch specific exceptions: except ValueError: or except Exception:",
-                ))
-
-            try:
-                func_tree = ast.parse(func_src)
-                for node in ast.walk(func_tree):
-                    if isinstance(node, ast.FunctionDef):
-                        for default in node.args.defaults:
-                            if isinstance(default, (ast.List, ast.Dict, ast.Set)):
-                                func_issues.append(SecurityIssue(
-                                    pattern_id="SEC007",
-                                    severity="low",
-                                    function_name=ff.name,
-                                    message="Mutable default argument — shared across all calls.",
-                                    lineno=ff.lineno,
-                                    remediation="Use None as default and initialize inside the function.",
-                                ))
-                                break
-            except SyntaxError:
-                pass
-
-            if "assert" in func_src and not any(
-                name in ("test_", "_test", "_tests") for name in [ff.name[:5]]
-            ):
-                if re.search(r'\bassert\b', func_src):
-                    func_issues.append(SecurityIssue(
-                        pattern_id="SEC008",
-                        severity="low",
-                        function_name=ff.name,
-                        message="assert statement used in non-test code — disabled with -O flag.",
-                        lineno=ff.lineno,
-                        remediation="Use explicit if/raise for runtime checks.",
-                    ))
-
-            ips = _HARD_CODED_IP.findall(func_src)
-            if ips:
-                func_issues.append(SecurityIssue(
-                    pattern_id="SEC012",
-                    severity="low",
-                    function_name=ff.name,
-                    message=f"Hardcoded IP address(es) found: {', '.join(ips[:3])}.",
-                    lineno=ff.lineno,
-                    remediation="Use configuration files or environment variables for host addresses.",
-                ))
-
-        for issue in func_issues:
-            report.add_issue(issue)
-
-        score = report.compute_function_score(ff.name, func_issues)
-        report.function_scores[ff.name] = score
-
+    for name, issues in per_func.items():
+        report.function_scores[name] = report.compute_function_score(name, issues)
     report.module_safe_pct = report.compute_module_safe_pct(report.function_scores)
     return report

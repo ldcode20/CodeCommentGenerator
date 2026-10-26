@@ -18,6 +18,10 @@ Options:
     --ml                 Use ML-based comment generation (Week 9)
     --train              Train/retrain the ML models and exit
     --output-dir DIR     Output directory for models/reports (default: outputs)
+    --security           Security analysis only (no comment generation); print
+                         findings with evidence traces and exit
+    --security-report    Also print full security findings after a pipeline run
+    --security-json FILE Write security findings (full schema) as JSON
 """
 import sys
 import os
@@ -28,6 +32,7 @@ import warnings
 # Suppress SyntaxWarnings from ast.parse when evaluating legacy CodeSearchNet/Stdlib files
 warnings.filterwarnings("ignore", category=SyntaxWarning)
 
+from .config import configure_stdio, resolve_output_dir
 from .parser_module import read_file, parse_code
 from .validator import validate_ast
 from .error_handler import format_error, ParserError
@@ -69,6 +74,14 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Use neurosymbolic (confidence-gated ML + symbolic) generation")
     p.add_argument("--train", action="store_true",
                    help="Train/retrain ML models and save reports, then exit")
+    p.add_argument("--quick", action="store_true",
+                   help="Fast smoke-test training preset (1 epoch, small corpus). "
+                        "Use it to verify the pipeline before a full run; the "
+                        "resulting model is NOT good enough for real output.")
+    p.add_argument("--dataset-json", metavar="FILE", default=None,
+                   help="Reuse a previously saved corpus "
+                        "(outputs/ast_train_dataset.json) instead of "
+                        "rebuilding it — skips the HuggingFace download")
     p.add_argument("--epochs", type=int, default=4,
                    help="Training epochs for AST model (default: 4)")
     p.add_argument("--batch-size", type=int, default=8,
@@ -87,7 +100,39 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Disable Python stdlib dataset source")
     p.add_argument("--output-dir", metavar="DIR", default="outputs",
                    help="Directory for ML model outputs (default: outputs)")
+    p.add_argument("--security", action="store_true",
+                   help="Run only the security analyzer on the original file and exit "
+                        "(exit status 1 if any non-suppressed finding)")
+    p.add_argument("--security-report", action="store_true",
+                   help="Print full security findings (with evidence traces) after the run")
+    p.add_argument("--security-json", metavar="FILE",
+                   help="Write security findings as JSON to FILE")
     return p
+
+
+def _write_security_json(path: str, findings_obj) -> None:
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(findings_obj, fh, indent=2)
+    print(f"  Security JSON written: {path}")
+
+
+def run_security_only(filepath: str, json_path=None) -> int:
+    """Security analysis independent of comment generation and the ML model."""
+    from .security import analyze_file
+    report = analyze_file(filepath)
+    if report.parse_error:
+        print(f"  Could not parse {filepath}: {report.parse_error}")
+        return 2
+    active = report.active()
+    for f in report.findings:
+        print(f.format_text())
+        print()
+    print(f"  {filepath}: {len(active)} active finding(s), {report.by_status()} "
+          f"({report.runtime_ms:.1f} ms)")
+    if json_path:
+        _write_security_json(json_path, report.to_dict())
+    return 1 if active else 0
 
 
 def run_pipeline(filepath: str, logger: PipelineLogger, ast_model=None, strict_ml: bool = False, engine: str = "rule_based"):
@@ -207,6 +252,7 @@ def run_pipeline(filepath: str, logger: PipelineLogger, ast_model=None, strict_m
         "total_issues": security_report.total_issues,
         "module_safe_pct": security_report.module_safe_pct,
         "by_severity": security_report.by_severity,
+        "by_status": security_report.by_status,
     })
 
     return (attach_result.annotated_source, comments, module_features,
@@ -215,24 +261,33 @@ def run_pipeline(filepath: str, logger: PipelineLogger, ast_model=None, strict_m
 
 
 def main():
+    configure_stdio()
     parser = build_parser()
     args = parser.parse_args()
 
-    # Resolve output_dir relative to this script's location if relative
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(script_dir)
-    output_dir = args.output_dir if os.path.isabs(args.output_dir) else \
-                 os.path.join(project_root, args.output_dir)
+    # Resolve against the project root, never the working directory, so the
+    # CLI and the GUI always look in the same place for the checkpoint.
+    output_dir = str(resolve_output_dir(args.output_dir))
 
     # ── --train : train models and exit ──────────────────────────────────
     if args.train:
+        if args.quick:
+            # Explicit, visible overrides — the defaults are a multi-hour job.
+            args.epochs            = 1
+            args.codesearchnet_max = 2000
+            args.max_stdlib_files  = 200
+            args.batch_size        = 8
+
         print(f"\n{'='*55}")
-        print("  Training AST+NLP ML Model")
+        print("  Training AST+NLP ML Model" + ("  [--quick preset]" if args.quick else ""))
         print(f"{'='*55}")
+        if args.quick:
+            print("  Quick mode: 1 epoch on a small corpus — pipeline check only.")
         try:
             from .ml.trainer import train_and_evaluate
             result = train_and_evaluate(
                 output_dir=output_dir,
+                dataset_json=args.dataset_json,
                 include_codesearchnet=not args.no_codesearchnet,
                 include_stdlib=not args.no_stdlib,
                 codesearchnet_max=args.codesearchnet_max,
@@ -267,6 +322,8 @@ def main():
         parser.error("filepath is required unless --train is specified")
 
     filepath = args.filepath
+    if args.security:
+        sys.exit(run_security_only(filepath, args.security_json))
     logger = PipelineLogger(input_file=filepath)
 
     print(f"\n{'='*55}")
@@ -343,8 +400,19 @@ def main():
     print(f"  IR functions built: {len(ir_module.functions)}")
     print(f"  Analysis findings : {len(analysis_report.findings)}")
     print(f"  Security issues   : {security_report.total_issues} "
-          f"({security_report.module_safe_pct}% safe)")
+          f"({security_report.module_safe_pct}% safe; {security_report.by_status})")
     print()
+
+    if args.security_report:
+        print("--- Security Findings (original source locations) ---")
+        for f in security_report.findings:
+            print(f.format_text())
+            print()
+    if args.security_json:
+        _write_security_json(args.security_json, {
+            "file": filepath, "summary": security_report.by_status,
+            "findings": [f.to_dict() for f in security_report.findings],
+        })
 
     for c in comments:
         kind_tag = "[docstring]" if c.kind == "docstring" else "[inline]  "

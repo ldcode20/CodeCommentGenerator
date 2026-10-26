@@ -8,8 +8,13 @@ Implements two classical data-flow analyses over a CFG:
    A definition d reaches a point p if there exists a path from d to p along
    which d is not re-defined (killed).
 
-   GEN[B]  = definitions created in block B
-   KILL[B] = definitions whose variable is re-defined in B
+   A definition is identified as ``"<var>@<uid>"`` where ``uid`` is the
+   function-unique id of the defining instruction.  The entry block also
+   receives a pseudo-definition ``"<var>@undef"`` for every local that is not
+   a parameter, so a use reached by ``@undef`` may be unbound.
+
+   GEN[B]  = last definition of each variable in B
+   KILL[B] = every other definition of a variable defined in B
    IN[B]   = ∪{ OUT[P] : P ∈ predecessors(B) }
    OUT[B]  = GEN[B] ∪ (IN[B] − KILL[B])
 
@@ -23,17 +28,27 @@ Implements two classical data-flow analyses over a CFG:
    OUT[B]  = ∪{ IN[S] : S ∈ successors(B) }
    IN[B]   = USE[B] ∪ (OUT[B] − DEF[B])
 
+Both use a worklist that iterates to a fixed point; the lattices are finite
+(sets of definitions / variables of one function) and the transfer functions
+monotone, so they terminate.  An explicit iteration cap guards against
+malformed CFGs and is reported through ``DFAResult.converged``.
+
 After running both analyses the engine also computes:
-  - unused_vars       : variables defined but never used across the whole function
-  - used_before_assigned : variables loaded before any assignment in entry block
+  - unused_vars          : user variables assigned but never read anywhere
+  - dead_stores          : assignments whose value is never read afterwards
+  - used_before_assigned : locals that may be read before any assignment
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Tuple
 
 from .cfg_builder import CFG, CFGNode
 from ..ir.ir_nodes import IRInstruction, IROpcode, IRFunction
+
+_TEMP = re.compile(r"^t\d+$")
+_CONTROL_OPS = (IROpcode.LABEL, IROpcode.JUMP, IROpcode.NOP)
 
 
 # ---------------------------------------------------------------------------
@@ -47,64 +62,86 @@ class DFAResult:
 
     Attributes:
         function_name        : Name of the analysed function.
-        reaching_defs        : Map { block_label → set of definition names
+        reaching_defs        : Map { block_label → set of definition ids
                                reaching the *entry* of that block }.
         live_vars            : Map { block_label → set of variable names
                                live at the *entry* of that block }.
-        used_before_assigned : Variables that appear as LOAD operands before
-                               any ASSIGN / LOAD result in the entry block.
-        unused_vars          : Variables defined (ASSIGN / LOAD result) anywhere
-                               in the function but never appear as a LOAD operand.
+        used_before_assigned : Locals that may be read on some path before
+                               being assigned.
+        unused_vars          : User variables assigned but never read.
+        dead_stores          : (variable, line) of assignments never read later.
+        converged            : False if an iteration cap was hit.
+        iterations           : Worklist iterations used (both analyses).
     """
     function_name: str
     reaching_defs: Dict[str, Set[str]] = field(default_factory=dict)
     live_vars: Dict[str, Set[str]] = field(default_factory=dict)
     used_before_assigned: List[str] = field(default_factory=list)
     unused_vars: List[str] = field(default_factory=list)
+    dead_stores: List[Tuple[str, int]] = field(default_factory=list)
+    converged: bool = True
+    iterations: int = 0
+    qualname: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Instruction-level def / use
+# ---------------------------------------------------------------------------
+
+def is_user_var(name: str) -> bool:
+    return bool(name) and not _TEMP.match(name) and not name.startswith("__")
+
+
+def instr_uses(instr: IRInstruction) -> List[str]:
+    """Variables read by an instruction (branch/jump labels excluded)."""
+    if instr.op in _CONTROL_OPS:
+        return []
+    if instr.op == IROpcode.BRANCH:
+        return instr.operands[:1]
+    if instr.op == IROpcode.LOAD and instr.meta.get("kind") == "param":
+        return []
+    return [o for o in instr.operands if o]
+
+
+def instr_def(instr: IRInstruction) -> str:
+    if instr.op in _CONTROL_OPS or instr.op == IROpcode.STORE:
+        return ""
+    return instr.result or ""
+
+
+def def_id(instr: IRInstruction) -> str:
+    return f"{instr.result}@{instr.uid}"
 
 
 # ---------------------------------------------------------------------------
 # Local gen / kill / use / def helpers
 # ---------------------------------------------------------------------------
 
-def _compute_gen_kill(node: CFGNode):
-    """
-    Compute GEN and KILL sets for reaching-definitions of a single block.
-
-    A 'definition' is represented as the result temporary name (e.g. ``t3``).
-    GEN[B] = { result : instr has a result }
-    KILL[B] = set of all results defined later in another block that are
-              re-defined here — we approximate this as the same GEN set
-              (each re-definition kills prior definitions of the same name).
-    """
-    gen: Set[str] = set()
+def _compute_gen_kill(node: CFGNode, defs_by_var: Dict[str, Set[str]]):
+    """GEN = last definition of each variable in the block; KILL = all others."""
+    last: Dict[str, str] = {}
     for instr in node.instructions:
-        if instr.result:
-            gen.add(instr.result)
-    # KILL ≈ same as GEN here (intra-block re-kills are absorbed)
-    return gen, set(gen)
+        v = instr_def(instr)
+        if v:
+            last[v] = def_id(instr)
+    gen = set(last.values())
+    kill: Set[str] = set()
+    for v in last:
+        kill |= defs_by_var.get(v, set())
+    return gen, kill - gen
 
 
 def _compute_use_def(node: CFGNode):
-    """
-    Compute USE and DEF sets for live-variable analysis of a single block.
-
-    USE[B] = variables used (as operands of non-LABEL, non-JUMP instructions)
-             before they are defined within the same block.
-    DEF[B] = variables defined (result temporaries) in this block.
-    """
+    """USE = upward-exposed uses; DEF = variables defined in the block."""
     use: Set[str] = set()
     definition: Set[str] = set()
     for instr in node.instructions:
-        if instr.op in (IROpcode.LABEL, IROpcode.JUMP, IROpcode.NOP):
-            continue
-        # Record uses before definition
-        for operand in instr.operands:
-            if operand and operand not in definition:
+        for operand in instr_uses(instr):
+            if operand not in definition:
                 use.add(operand)
-        # Record definitions
-        if instr.result:
-            definition.add(instr.result)
+        v = instr_def(instr)
+        if v:
+            definition.add(v)
     return use, definition
 
 
@@ -112,151 +149,129 @@ def _compute_use_def(node: CFGNode):
 # Reaching Definitions (forward, worklist)
 # ---------------------------------------------------------------------------
 
-def _reaching_definitions(cfg: CFG) -> Dict[str, Set[str]]:
-    """
-    Compute reaching-definition IN-sets for all blocks.
+def _reaching_definitions(cfg: CFG, undef_vars: Set[str]):
+    defs_by_var: Dict[str, Set[str]] = {}
+    for node in cfg.nodes.values():
+        for instr in node.instructions:
+            v = instr_def(instr)
+            if v:
+                defs_by_var.setdefault(v, set()).add(def_id(instr))
+    for v in undef_vars:
+        defs_by_var.setdefault(v, set()).add(f"{v}@undef")
 
-    Returns:
-        { label → set of definition names reaching the entry of that block }
-    """
-    gen_map: Dict[str, Set[str]] = {}
-    kill_map: Dict[str, Set[str]] = {}
-    out_map: Dict[str, Set[str]] = {}
-    in_map:  Dict[str, Set[str]] = {}
-
+    gen_map, kill_map, out_map, in_map = {}, {}, {}, {}
     for label, node in cfg.nodes.items():
-        gen, kill = _compute_gen_kill(node)
-        gen_map[label]  = gen
-        kill_map[label] = kill
-        out_map[label]  = set(gen)  # initial OUT = GEN
-        in_map[label]   = set()
+        gen, kill = _compute_gen_kill(node, defs_by_var)
+        if label == cfg.entry:
+            # Pseudo-definitions are generated "before" the entry block.
+            entry_defs = {f"{v}@undef" for v in undef_vars}
+            defined_here = {instr_def(i) for i in node.instructions if instr_def(i)}
+            gen |= {d for d in entry_defs if d.split("@")[0] not in defined_here}
+        gen_map[label], kill_map[label] = gen, kill
+        out_map[label] = set(gen)
+        in_map[label] = set()
 
-    # Worklist: process all blocks; re-add if OUT changes
     worklist = list(cfg.nodes.keys())
     iterations = 0
-    max_iter = len(cfg.nodes) * 10  # safety cap
-
+    max_iter = max(100, len(cfg.nodes) * 50)
     while worklist and iterations < max_iter:
         iterations += 1
         label = worklist.pop(0)
-        node  = cfg.nodes[label]
-
-        # IN[B] = union of OUT[P] for each predecessor P
+        node = cfg.nodes[label]
         new_in: Set[str] = set()
         for pred_label in node.predecessors:
             new_in |= out_map.get(pred_label, set())
-
-        # OUT[B] = GEN[B] ∪ (IN[B] − KILL[B])
         new_out = gen_map[label] | (new_in - kill_map[label])
-
+        in_map[label] = new_in
         if new_out != out_map[label]:
             out_map[label] = new_out
-            # Re-add successors
             for succ in node.successors:
                 if succ not in worklist:
                     worklist.append(succ)
-
-        in_map[label] = new_in
-
-    return in_map
+    for label, node in cfg.nodes.items():
+        node.reach_in, node.reach_out = set(in_map[label]), set(out_map[label])
+    return in_map, iterations, not worklist
 
 
 # ---------------------------------------------------------------------------
 # Live Variable Analysis (backward, worklist)
 # ---------------------------------------------------------------------------
 
-def _live_variables(cfg: CFG) -> Dict[str, Set[str]]:
-    """
-    Compute live-variable IN-sets for all blocks.
-
-    Returns:
-        { label → set of variable names live at the entry of that block }
-    """
-    use_map: Dict[str, Set[str]] = {}
-    def_map: Dict[str, Set[str]] = {}
-    in_map:  Dict[str, Set[str]] = {}
-    out_map: Dict[str, Set[str]] = {}
-
+def _live_variables(cfg: CFG):
+    use_map, def_map, in_map, out_map = {}, {}, {}, {}
     for label, node in cfg.nodes.items():
         use, defn = _compute_use_def(node)
-        use_map[label] = use
-        def_map[label] = defn
-        in_map[label]  = set(use)   # initial IN = USE
+        use_map[label], def_map[label] = use, defn
+        in_map[label] = set(use)
         out_map[label] = set()
 
-    worklist = list(reversed(cfg.topological_order()))
+    order = cfg.topological_order()
+    worklist = list(reversed(order)) + [l for l in cfg.nodes if l not in order]
     iterations = 0
-    max_iter = len(cfg.nodes) * 10
-
+    max_iter = max(100, len(cfg.nodes) * 50)
     while worklist and iterations < max_iter:
         iterations += 1
         label = worklist.pop(0)
-        node  = cfg.nodes[label]
-
-        # OUT[B] = union of IN[S] for each successor S
+        node = cfg.nodes[label]
         new_out: Set[str] = set()
         for succ_label in node.successors:
             new_out |= in_map.get(succ_label, set())
-
-        # IN[B] = USE[B] ∪ (OUT[B] − DEF[B])
         new_in = use_map[label] | (new_out - def_map[label])
-
+        out_map[label] = new_out
         if new_in != in_map[label]:
             in_map[label] = new_in
             for pred in node.predecessors:
                 if pred not in worklist:
                     worklist.append(pred)
-
-        out_map[label] = new_out
-
-    return in_map
+    for label, node in cfg.nodes.items():
+        node.live_in, node.live_out = set(in_map[label]), set(out_map[label])
+    return in_map, out_map, iterations, not worklist
 
 
 # ---------------------------------------------------------------------------
-# Unused / used-before-assigned heuristics
+# Derived facts
 # ---------------------------------------------------------------------------
 
-def _find_unused_and_uninitialized(
-    cfg: CFG,
-    ir_function: IRFunction,
-) -> tuple[List[str], List[str]]:
-    """
-    Scan all instructions across the whole function to find:
-    - ``used_before_assigned``: names used as operands before appearing as
-      results (checked only for LOAD instructions in the entry block, i.e.
-      params that shadow potential globals).
-    - ``unused_vars``: result temporaries that never appear as an operand
-      anywhere in the function.
-    """
-    all_defs: Set[str]  = set()   # all result temp names
-    all_uses: Set[str]  = set()   # all operand names
+def _derived_facts(cfg: CFG, ir_function: IRFunction, reach_in, live_out, undef_vars):
+    all_uses: Set[str] = set()
+    defined: Set[str] = set()
+    for node in cfg.nodes.values():
+        for instr in node.instructions:
+            all_uses.update(instr_uses(instr))
+            v = instr_def(instr)
+            if v:
+                defined.add(v)
 
-    for instr in ir_function.all_instructions():
-        if instr.result:
-            all_defs.add(instr.result)
-        for op in instr.operands:
-            if op and not op.startswith("__"):   # skip synthetic placeholders
-                all_uses.add(op)
+    params = set(ir_function.params)
+    unused = sorted(v for v in defined - all_uses - params
+                    if is_user_var(v) and v != "_" and not v.startswith("_"))
 
-    # Unused: defined but never used as an operand
-    # (exclude the final return temp — it's by definition only assigned once)
-    unused = sorted(all_defs - all_uses - {f"t{i}" for i in range(len(ir_function.params))})
-
-    # Used-before-assigned: operands that look like user variables (not temps)
-    # that appear before any ASSIGN result in the entry block
-    used_before: List[str] = []
-    if ir_function.blocks:
-        assigned_so_far: Set[str] = set()
-        for instr in ir_function.blocks[0].instructions:
-            if instr.op == IROpcode.ASSIGN and instr.result:
-                assigned_so_far.add(instr.result)
-            elif instr.op in (IROpcode.BINOP, IROpcode.CALL, IROpcode.RETURN):
-                for op in instr.operands:
-                    if (op and not op.startswith("t") and not op.startswith("__")
-                            and op not in assigned_so_far):
-                        used_before.append(op)
-
-    return list(set(used_before)), unused
+    dead: List[Tuple[str, int]] = []
+    maybe_unbound: Set[str] = set()
+    for label, node in cfg.nodes.items():
+        # Backward pass inside the block for dead stores.
+        live = set(live_out.get(label, set()))
+        for instr in reversed(node.instructions):
+            v = instr_def(instr)
+            if v:
+                if (is_user_var(v) and v not in live and v in all_uses
+                        and instr.meta.get("kind") != "param" and not v.startswith("_")):
+                    dead.append((v, instr.lineno))
+                live.discard(v)
+            live.update(instr_uses(instr))
+        # Forward pass for possibly-unbound reads.
+        reaching = set(reach_in.get(label, set()))
+        if label == cfg.entry:
+            reaching |= {f"{v}@undef" for v in undef_vars}
+        for instr in node.instructions:
+            for u in instr_uses(instr):
+                if u in undef_vars and f"{u}@undef" in reaching:
+                    maybe_unbound.add(u)
+            v = instr_def(instr)
+            if v:
+                reaching = {d for d in reaching if d.split("@")[0] != v}
+                reaching.add(def_id(instr))
+    return unused, sorted(set(dead), key=lambda x: (x[1], x[0])), sorted(maybe_unbound)
 
 
 # ---------------------------------------------------------------------------
@@ -269,20 +284,28 @@ def run_dfa(cfg: CFG, ir_function: IRFunction) -> DFAResult:
 
     Args:
         cfg         : CFG built by ``cfg_builder.build_cfg()``.
-        ir_function : The corresponding IRFunction (used for whole-function
-                      unused-variable scan).
+        ir_function : The corresponding IRFunction.
 
     Returns:
         DFAResult with all analysis data populated.
     """
-    reaching = _reaching_definitions(cfg)
-    live     = _live_variables(cfg)
-    used_before, unused = _find_unused_and_uninitialized(cfg, ir_function)
-
+    reachable = set(cfg.topological_order())
+    undef_vars = {v for v in ir_function.locals - set(ir_function.params) if is_user_var(v)}
+    reaching, it1, ok1 = _reaching_definitions(cfg, undef_vars)
+    live_in, live_out, it2, ok2 = _live_variables(cfg)
+    unused, dead, maybe_unbound = _derived_facts(
+        cfg, ir_function,
+        {l: s for l, s in reaching.items() if l in reachable},
+        live_out, undef_vars,
+    )
     return DFAResult(
         function_name=ir_function.name,
         reaching_defs={label: set(s) for label, s in reaching.items()},
-        live_vars={label: set(s) for label, s in live.items()},
-        used_before_assigned=used_before,
+        live_vars={label: set(s) for label, s in live_in.items()},
+        used_before_assigned=maybe_unbound,
         unused_vars=unused,
+        dead_stores=dead,
+        converged=ok1 and ok2,
+        iterations=it1 + it2,
+        qualname=ir_function.qualname or ir_function.name,
     )

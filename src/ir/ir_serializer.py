@@ -23,6 +23,7 @@ Two output formats for an IRModule:
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 from typing import Any, Dict
 
@@ -34,13 +35,21 @@ from .ir_nodes import IRModule, IRFunction, IRBlock, IRInstruction, IROpcode
 # ---------------------------------------------------------------------------
 
 def _instr_to_dict(instr: IRInstruction) -> Dict[str, Any]:
-    return {
+    d: Dict[str, Any] = {
         "op": instr.op.value,
         "result": instr.result,
         "operands": instr.operands,
         "lineno": instr.lineno,
+        "col": instr.col,
         "meta": instr.meta,
     }
+    if instr.call is not None:
+        d["call"] = dataclasses.asdict(instr.call)
+    if instr.refinements:
+        d["refinements"] = [dataclasses.asdict(r) for r in instr.refinements]
+    if instr.guards:
+        d["guards"] = list(instr.guards)
+    return d
 
 
 def _block_to_dict(block: IRBlock) -> Dict[str, Any]:
@@ -121,16 +130,26 @@ def _fmt_instr(instr: IRInstruction, indent: str = "  ") -> str:
         return f"{indent}{lhs}{lhs_op} {operator} {rhs_op}"
 
     if instr.op == IROpcode.CALL:
-        callee = instr.meta.get("callee", instr.operands[0] if instr.operands else "?")
-        args = ", ".join(instr.operands[1:])
         lhs = f"{instr.result} = " if instr.result else ""
-        return f"{indent}{lhs}call {callee}({args})"
+        c = instr.call
+        if c is None:
+            callee = instr.meta.get("callee", "?")
+            return f"{indent}{lhs}call {callee}({', '.join(instr.operands)})"
+        callee = c.callee or (f"{c.receiver}.{c.method}" if c.receiver and c.method else c.raw_callee)
+        args = list(c.args) + [f"{k}={v}" for k, v in c.keywords.items()] + \
+            [f"*{s}" for s in c.star_args]
+        return f"{indent}{lhs}call {callee}({', '.join(args)})"
 
-    # Generic fallback: LOAD, STORE, ASSIGN, UNOP
+    # Generic fallback: LOAD, STORE, ASSIGN, UNOP, ATTR, SUBSCR, BUILD, MAKEFUNC
     operands_str = ", ".join(instr.operands) if instr.operands else ""
     lhs = f"{instr.result} = " if instr.result else ""
     extra = f"({operands_str})" if operands_str else ""
-    return f"{indent}{lhs}{op}{extra}"
+    detail = ""
+    for key in ("const", "path", "attr", "kind", "func"):
+        if key in instr.meta:
+            detail = f"  ; {key}={instr.meta[key]}"
+            break
+    return f"{indent}{lhs}{op}{extra}{detail}"
 
 
 def _fmt_block(block: IRBlock) -> str:

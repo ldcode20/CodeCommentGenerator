@@ -2,15 +2,18 @@ import os
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QTextEdit, QSplitter, QTreeWidget, QTreeWidgetItem)
 from PyQt6.QtCore import Qt
+from src.config import PROJECT_ROOT, OUTPUT_DIR
 from src.gui.syntax_highlighter import JsonSyntaxHighlighter
 
 class LogsWorkspace(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        # Absolute, so the viewer finds the files regardless of where the
+        # app was launched from.
         self.output_dirs = {
-            "Pipeline Logs": "out/annotated/logs",
-            "Model Training Outputs": "outputs",
-            "Model Training Logs": "outputs/logs"
+            "Pipeline Logs": str(PROJECT_ROOT / "out" / "annotated" / "logs"),
+            "Model Training Outputs": str(OUTPUT_DIR),
+            "Model Training Logs": str(OUTPUT_DIR / "logs"),
         }
         self.setup_ui()
         

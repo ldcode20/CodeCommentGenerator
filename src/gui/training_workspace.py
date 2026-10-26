@@ -6,6 +6,7 @@ from PyQt6.QtCore import pyqtSignal, QThread, QTimer
 from PyQt6.QtGui import QColor, QTextCharFormat, QTextCursor, QFont
 import json
 
+from src.config import OUTPUT_DIR
 from src.ml.trainer import train_and_evaluate
 from src.gui.widgets import SpinningButton
 
@@ -17,8 +18,11 @@ class TrainerWorker(QThread):
     def run(self):
         try:
             self.status.emit("Starting AST+NLP training pipeline...")
+            # Must match where GeneratorWorkspace loads the model from —
+            # training into a separate directory is why GUI training never
+            # cleared the "No trained AST+NLP model found" error.
             result = train_and_evaluate(
-                output_dir="outputs/gui_models",
+                output_dir=str(OUTPUT_DIR),
                 verbose=True
             )
             self.status.emit("Training completed successfully!")
