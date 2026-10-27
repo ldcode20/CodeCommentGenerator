@@ -89,16 +89,21 @@ class TestFixtureSuite(unittest.TestCase):
             self.assertGreater(m["tn"] + m["fp"], 0, f"{name}: no negative example")
 
     def test_overall_counts_all_reported(self):
+        # Updated when alias/getattr resolution landed: the former known-limitation cases
+        # (bound-method alias, getattr with a literal name) are detected; two new
+        # known-limitation cases (callback parameter, computed getattr) remain missed.
         o = self.all["overall"]
-        self.assertEqual((o["tp"], o["fp"], o["tn"], o["fn"]), (73, 0, 52, 1))
+        self.assertEqual((o["tp"], o["fp"], o["tn"], o["fn"]), (74, 0, 53, 2))
         self.assertEqual(self.all["false_negatives"],
-                         [{"file": "cmdi_vulnerable.py", "line": 83, "rule": "SEC002",
+                         [{"file": "cmdi_vulnerable.py", "line": 87, "rule": "SEC002",
+                           "known_limitation": True},
+                          {"file": "cmdi_vulnerable.py", "line": 96, "rule": "SEC002",
                            "known_limitation": True}])
         self.assertEqual(self.all["suppression_checks"], {"expected": 1, "correct": 1})
 
     def test_overall_counts_confirmed_only(self):
         o = self.confirmed["overall"]
-        self.assertEqual((o["tp"], o["fp"], o["tn"], o["fn"]), (56, 0, 52, 18))
+        self.assertEqual((o["tp"], o["fp"], o["tn"], o["fn"]), (58, 0, 53, 18))
 
     def test_counts_are_reproducible(self):
         again = evaluate()

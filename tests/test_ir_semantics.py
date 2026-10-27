@@ -140,6 +140,17 @@ class TestCFGShape(unittest.TestCase):
         cfg = build_cfg(fn(code, "f"))
         self.assertIn("try_0_body", cfg.nodes["try_0_except_0"].predecessors)
 
+    def test_return_inside_try_runs_finally(self):
+        code = ("def f(p):\n    try:\n        return p\n    finally:\n        cleanup()\n")
+        f = fn(code, "f")
+        cfg = build_cfg(f)
+        self.assertIn("try_0_finally_exit", cfg.nodes)
+        fx = cfg.nodes["try_0_finally_exit"]
+        self.assertTrue(any(i.op == IROpcode.CALL for i in fx.instructions))   # cleanup() copy
+        self.assertIn("exit", fx.successors)
+        self.assertNotIn("exit", cfg.nodes["try_0_body"].successors)        # no bypass
+        self.assertFalse(any("bypasses" in n for n in f.unsupported))
+
     def test_noreturn_call_terminates_path(self):
         code = "import sys\ndef f(a):\n    if not a:\n        sys.exit(1)\n    return a\n"
         cfg = build_cfg(fn(code, "f"))

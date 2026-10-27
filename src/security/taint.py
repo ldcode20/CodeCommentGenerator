@@ -40,11 +40,13 @@ from dataclasses import dataclass, field, replace
 from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 from ..analysis.cfg_builder import build_cfg
-from ..ir.ir_nodes import IRFunction, IRInstruction, IRModule, IROpcode
+from ..ir.ir_nodes import CallInfo, IRFunction, IRInstruction, IRModule, IROpcode
 from ..ir.lowering import MODULE_QUALNAME, RETURN_VAR
+from . import values as cv
+from .values import NOVAL
 from .rules import (
     ALL_CONTEXTS, CANONICALIZER_METHODS, DB_CREATORS, DB_METHODS, DEFAULT_REGISTRY,
-    MUTATOR_METHODS, PATH_CREATORS, PATH_METHODS, PROPAGATOR_CALLEES, PROPAGATOR_METHODS,
+    MUTATOR_METHODS, PATH_CREATORS, RECEIVER_ONLY_METHODS, SANDBOX_CREATORS, SESSION_STORE_PATTERN, PATH_METHODS, PROPAGATOR_CALLEES, PROPAGATOR_METHODS,
     SAFE_YAML_LOADERS, Registry, SinkSpec,
 )
 
@@ -97,13 +99,20 @@ EMPTY: TaintValue = {}
 
 
 def _join_info(a: TaintInfo, b: TaintInfo) -> TaintInfo:
+    if a is b:
+        return a
     trace = a.trace if len(a.trace) <= len(b.trace) else b.trace
     return TaintInfo(a.contexts | b.contexts, a.markers & b.markers, a.unc | b.unc, trace)
 
 
 def join_values(*values: TaintValue) -> TaintValue:
+    nonempty = [v for v in values if v]
+    if not nonempty:
+        return EMPTY
+    if len(nonempty) == 1 or all(v is nonempty[0] for v in nonempty):
+        return nonempty[0]
     out: TaintValue = {}
-    for v in values:
+    for v in nonempty:
         for k, info in v.items():
             out[k] = _join_info(out[k], info) if k in out else info
     return out
@@ -113,15 +122,112 @@ def value_sig(v: TaintValue) -> frozenset:
     return frozenset((k, i.contexts, i.markers, i.unc) for k, i in v.items())
 
 
+# Auxiliary facts live in the state under "#c:<var>" (known constant: ("c", value)) and
+# "#s:<var>" (container shape: ("l", ((taint, const), ...)) or ("d", ((key, taint, const), ...))).
+def _cval_sig(c) -> str:
+    return "?" if c is NOVAL else repr(c)
+
+
+MAX_CONST_SET = 16
+
+
+def aux_sig(a) -> tuple:
+    if a[0] == "a":
+        return ("a", tuple(sorted(a[1])))
+    if a[0] == "cs":
+        return ("cs", tuple(sorted(f"{type(x).__name__}:{x!r}" for x in a[1])))
+    if a[0] == "f":
+        return ("f", repr(a[1]))
+    if a[0] == "c":
+        return ("c", type(a[1]).__name__, repr(a[1]))
+    if a[0] == "l":
+        return ("l", tuple((value_sig(t), _cval_sig(c)) for t, c in a[1]))
+    return ("d", tuple((repr(k), value_sig(t), _cval_sig(c)) for k, t, c in a[1]))
+
+
+def _same_const(a, b) -> bool:
+    return type(a) is type(b) and a == b
+
+
+def join_aux(values: list):
+    first = values[0]
+    if all(v is first for v in values):
+        return first
+    if all(v[0] in ("c", "cs") for v in values):
+        if first[0] == "c" and all(v[0] == "c" and _same_const(v[1], first[1]) for v in values):
+            return first
+        # Different constants on different paths: keep the (small) set of possible literals.
+        members = set()
+        try:
+            for v in values:
+                members |= set(v[1]) if v[0] == "cs" else {(type(v[1]).__name__, v[1])}
+        except TypeError:
+            return None
+        return ("cs", frozenset(members)) if len(members) <= MAX_CONST_SET else None
+    if any(v[0] != first[0] for v in values):
+        return None
+    if first[0] == "f":           # callable descriptor: kept only if every path agrees
+        return first if all(v[1] == first[1] for v in values) else None
+    if first[0] == "l":
+        if any(len(v[1]) != len(first[1]) for v in values):
+            return None
+        elems = []
+        for i in range(len(first[1])):
+            ts = [v[1][i][0] for v in values]
+            cs = [v[1][i][1] for v in values]
+            c = cs[0] if all(x is not NOVAL and _same_const(x, cs[0]) for x in cs) else NOVAL
+            elems.append((join_values(*ts), c))
+        return ("l", tuple(elems))
+    keys = [k for k, _, _ in first[1]]
+    key_set = {repr(k) for k in keys}
+    if any({repr(k) for k, _, _ in v[1]} != key_set or len(v[1]) != len(keys) for v in values):
+        return None
+    by_key = [{repr(k): (t, c) for k, t, c in v[1]} for v in values]
+    elems = []
+    for k in keys:
+        ts = [m[repr(k)][0] for m in by_key]
+        cs = [m[repr(k)][1] for m in by_key]
+        c = cs[0] if all(x is not NOVAL and _same_const(x, cs[0]) for x in cs) else NOVAL
+        elems.append((k, join_values(*ts), c))
+    return ("d", tuple(elems))
+
+
 def state_sig(s: State) -> frozenset:
-    return frozenset((var, value_sig(v)) for var, v in s.items() if v)
+    return frozenset((var, aux_sig(v) if var[:1] == "#" else value_sig(v)) for var, v in s.items() if v)
 
 
 def join_states(states: List[State]) -> State:
-    out: State = {}
+    if not states:
+        return {}
+    if len(states) == 1:
+        return dict(states[0])
+    out: State = dict(states[0])
+    for s in states[1:]:
+        for var, v in s.items():
+            if var[:1] == "#":
+                continue
+            cur = out.get(var)
+            if cur is None:
+                out[var] = v
+            elif cur is not v:
+                out[var] = join_values(cur, v)
+    # Alias groups ("#a:x") are may-alias facts: union over incoming paths.
     for s in states:
         for var, v in s.items():
-            out[var] = join_values(out[var], v) if var in out else v
+            if var[:3] == "#a:":
+                cur = out.get(var)
+                out[var] = ("a", (cur[1] if cur else frozenset()) | v[1])
+    for var in [k for k in out if k[:1] == "#" and k[:3] != "#a:"]:
+        vals = [s.get(var) for s in states]
+        joined = join_aux(vals) if all(v is not None for v in vals) else None
+        if joined is None:
+            del out[var]
+        else:
+            out[var] = joined
+    # A strong-update key ("obj.attr") is only definitely untainted if every path set it.
+    for var in [k for k, v in out.items() if not v and "." in k]:
+        if any(var not in s for s in states):
+            del out[var]
     return out
 
 
@@ -231,25 +337,39 @@ class _FnRun:
 # Engine
 # ---------------------------------------------------------------------------
 
+_CONFIGPARSER_TYPES = {"configparser.ConfigParser", "configparser.RawConfigParser",
+                       "configparser.SafeConfigParser"}
+
 _SQLISH = re.compile(r"^\s*(select\s.+\sfrom\s|insert\s+into\s|update\s+\S+\s+set\s|delete\s+from\s"
                      r"|replace\s+into\s|create\s+table\s|drop\s+table\s)", re.IGNORECASE | re.DOTALL)
 _TEMPLATE_CHAIN = re.compile(r"\{\}|%s|\{\w*\}")
 
 
 class TaintEngine:
-    def __init__(self, ir_module: IRModule, registry: Registry = DEFAULT_REGISTRY,
+    """
+    Taint analysis over one module (single-file mode) or several modules (project mode,
+    see ``security.project``). In project mode function qualnames carry their module
+    prefix (``pkg.mod.func``) and every module keeps its own globals and types.
+    """
+
+    def __init__(self, ir_module, registry: Registry = DEFAULT_REGISTRY,
                  max_rounds: int = MAX_ROUNDS):
-        self.m = ir_module
+        mods: List[IRModule] = list(ir_module) if isinstance(ir_module, (list, tuple)) else [ir_module]
+        self.modules = mods
+        self.m = mods[0]
         self.reg = registry
         self.max_rounds = max_rounds
-        self.functions: Dict[str, IRFunction] = {f.qualname: f for f in ir_module.functions}
-        self.module_fn = ir_module.module_body
-        self.order: List[IRFunction] = ([self.module_fn] if self.module_fn else []) + \
-            list(ir_module.functions)
+        self.functions: Dict[str, IRFunction] = {f.qualname: f for m in mods for f in m.functions}
+        self.module_fns: Dict[str, IRFunction] = {m.module_name: m.module_body for m in mods
+                                                  if m.module_body is not None}
+        self._module_body_ids = {id(f) for f in self.module_fns.values()}
+        self.module_fn = mods[0].module_body
+        self.order: List[IRFunction] = list(self.module_fns.values()) + \
+            [f for m in mods for f in m.functions]
         self.summaries: Dict[str, Summary] = {q: Summary() for q in self.functions}
         self.fields: Dict[Tuple[str, str], TaintValue] = {}
         self.closures: Dict[str, Dict[str, TaintValue]] = {}
-        self.globals: State = {}
+        self.globals: Dict[str, State] = {name: {} for name in self.module_fns}
         self.origins: Dict[tuple, Origin] = {}
         self.callers: Dict[str, Set[str]] = {}
         self.converged = True
@@ -262,8 +382,9 @@ class TaintEngine:
         self._route_re = re.compile(registry.route_decorator_pattern)
         self.html_sink_callees = {c for s in registry.sinks if s.rule_id == "SEC014"
                                   for c in s.callees}
-        self._module_types = self._compute_types(self.module_fn) if self.module_fn else {}
+        self._module_types: Dict[str, Dict[str, Set[str]]] = {}
         self._type_cache: Dict[str, Dict[str, Set[str]]] = {}
+        self._types_in_progress: Set[str] = set()
         self._const_cache: Dict[str, Dict[str, object]] = {}
         self._def_cache: Dict[str, Dict[str, IRInstruction]] = {}
         self._makefunc: Dict[str, Dict[str, str]] = {}
@@ -272,9 +393,30 @@ class TaintEngine:
                 i.result: i.meta["func"] for i in fn.all_instructions()
                 if i.op == IROpcode.MAKEFUNC and i.result
             }
-        self._top_level = {f.qualname for f in ir_module.functions
-                           if "." not in f.qualname}
-        self._classes = {f.qualname.rsplit(".", 1)[0] for f in ir_module.functions if f.class_name}
+        self._top_level = {f.qualname for f in self.functions.values()
+                           if f.enclosing is None and f.class_name is None}
+        self._classes = {f.qualname.rsplit(".", 1)[0] for f in self.functions.values() if f.class_name}
+        for m in mods:      # classes without methods still construct instances
+            for cls in m.classes:
+                self._classes.add(cls)
+        for name, body in self.module_fns.items():
+            self._module_types[name] = self._compute_types(body)
+
+    @staticmethod
+    def qn(module: str, name: str) -> str:
+        return f"{module}.{name}" if module else name
+
+    def function_by_qualname(self, qualname: str) -> Optional[IRFunction]:
+        fn = self.functions.get(qualname)
+        if fn is None:
+            fn = next((m for m in self.module_fns.values() if m.qualname == qualname), None)
+        return fn
+
+    def is_module_body(self, fn: Optional[IRFunction]) -> bool:
+        return fn is not None and id(fn) in self._module_body_ids
+
+    def module_types(self, module: str) -> Dict[str, Set[str]]:
+        return self._module_types.get(module, {})
 
     # ── public ─────────────────────────────────────────────────────────
 
@@ -293,13 +435,14 @@ class TaintEngine:
                     self.callers.setdefault(callee, set()).add(fn.qualname)
                 if not run.converged:
                     self.unconverged_functions.add(fn.qualname)
-                if fn is self.module_fn:
-                    new_globals = {k: v for k, v in run.final_state.items() if v}
-                    merged = {k: join_values(self.globals.get(k, {}), v) for k, v in new_globals.items()}
-                    merged.update({k: v for k, v in self.globals.items() if k not in merged})
-                    if state_sig(merged) != state_sig(self.globals):
+                if self.is_module_body(fn):
+                    old_g = self.globals.get(fn.module, {})
+                    new_globals = {k: v for k, v in run.final_state.items() if v and k[:1] != "#"}
+                    merged = {k: join_values(old_g.get(k, {}), v) for k, v in new_globals.items()}
+                    merged.update({k: v for k, v in old_g.items() if k not in merged})
+                    if state_sig(merged) != state_sig(old_g):
                         changed = True
-                        self.globals = merged
+                        self.globals[fn.module] = merged
                 else:
                     old = self.summaries[fn.qualname]
                     new = Summary(ret=join_values(old.ret, run.summary.ret),
@@ -351,6 +494,7 @@ class TaintEngine:
         entry_state = ctx.entry_state()
         order = cfg.topological_order()
         worklist = list(order)
+        processed: Set[str] = set()
         iterations = 0
         max_iter = max(200, 40 * len(cfg.nodes))
         while worklist and iterations < max_iter:
@@ -360,10 +504,14 @@ class TaintEngine:
             if label == cfg.entry:
                 state_in = dict(entry_state)
             else:
-                state_in = join_states([ctx.edge_state(p, label, out_states.get(p))
-                                        for p in node.predecessors if p in out_states])
+                preds = [p for p in node.predecessors
+                         if p in out_states and ctx.feasible(p, label, out_states[p])]
+                if not preds:
+                    continue      # not reachable on any feasible path (yet)
+                state_in = join_states([ctx.edge_state(p, label, out_states[p]) for p in preds])
             in_states[label] = state_in
-            state_out = ctx.transfer_block(node.instructions, state_in, record=False)
+            processed.add(label)
+            state_out = ctx.prune(ctx.transfer_block(node.instructions, state_in, record=False))
             if label not in out_states or state_sig(state_out) != state_sig(out_states[label]):
                 out_states[label] = state_out
                 for s in node.successors:
@@ -371,10 +519,11 @@ class TaintEngine:
                         worklist.append(s)
         converged = not worklist
 
-        # Record pass over the fixed point.
-        reachable = set(order)
+        # Record pass over the fixed point (blocks reachable along feasible edges only).
+        reachable = processed
         for label in order:
-            ctx.transfer_block(cfg.nodes[label].instructions, in_states[label], record=True)
+            if label in processed:
+                ctx.transfer_block(cfg.nodes[label].instructions, in_states[label], record=True)
         exit_state = in_states.get("exit", {})
         ret = ctx.get(exit_state, RETURN_VAR)
         if ctx.is_route and "exit" in reachable:
@@ -386,7 +535,7 @@ class TaintEngine:
         )
         concrete = [h for h in ctx.hits if self.origins[h.origin_key].kind != "param"
                     or self.origins[h.origin_key].function != fn.qualname]
-        final_state = dict(exit_state) if fn is self.module_fn else {}
+        final_state = dict(exit_state) if self.is_module_body(fn) else {}
         return _FnRun(summary, concrete, ctx.api_uses, ctx.sql_builds, ctx.field_writes,
                       ctx.closure_writes, final_state, converged, ctx.callees)
 
@@ -406,7 +555,7 @@ class TaintEngine:
         types: Dict[str, Set[str]] = {}
         if fn is None:
             return types
-        module_types = getattr(self, "_module_types", {})
+        module_types = self._module_types.get(fn.module, {})
 
         def tget(name):
             return types.get(name) or (module_types.get(name, set()) if name not in fn.locals else set())
@@ -421,12 +570,25 @@ class TaintEngine:
                         new.add("db")
                     if c.callee in PATH_CREATORS:
                         new.add("path")
+                    if c.callee in SANDBOX_CREATORS:
+                        new.add("jinja_sandbox")
                     if c.method == "cursor" or (c.receiver and c.method in DB_METHODS
                                                 and "db" in tget(c.receiver)):
                         new.add("db")
                     if c.receiver and c.method in PATH_METHODS | CANONICALIZER_METHODS \
                             and "path" in tget(c.receiver):
                         new.add("path")
+                    # Project classes: constructor calls and functions returning instances.
+                    for q, _bound in self._resolve(fn, instr, tget):
+                        if q.endswith(".__init__") and q[:-9] in self._classes:
+                            new.add("class:" + q[:-9])
+                        else:
+                            new |= self.return_classes(q)
+                    if c.receiver is None and c.callee:
+                        for cls in (self.qn(fn.module, c.callee), c.callee):
+                            if cls in self._classes and f"{cls}.__init__" not in self.functions:
+                                new.add("class:" + cls)     # class without __init__
+                                break
                 elif instr.op == IROpcode.ASSIGN and instr.operands:
                     new |= tget(instr.operands[0])
                 elif instr.op == IROpcode.BINOP and instr.meta.get("operator") == "Div":
@@ -439,6 +601,17 @@ class TaintEngine:
                 break
         return types
 
+    def return_classes(self, qual: str) -> Set[str]:
+        """Project classes whose instances function ``qual`` may return."""
+        fn = self.functions.get(qual)
+        if fn is None or qual in self._types_in_progress:
+            return set()
+        self._types_in_progress.add(qual)
+        try:
+            return {t for t in self.types_for(fn).get(RETURN_VAR, set()) if t.startswith("class:")}
+        finally:
+            self._types_in_progress.discard(qual)
+
     def consts_for(self, fn: IRFunction) -> Dict[str, object]:
         if fn.qualname not in self._const_cache:
             consts: Dict[str, object] = {}
@@ -447,7 +620,7 @@ class TaintEngine:
                     try:
                         consts[instr.result] = ast.literal_eval(instr.meta["const"])
                     except Exception:
-                        consts[instr.result] = instr.meta["const"]
+                        pass   # not a literal: value unknown
             self._const_cache[fn.qualname] = consts
         return self._const_cache[fn.qualname]
 
@@ -460,11 +633,25 @@ class TaintEngine:
             }
         return self._def_cache[fn.qualname]
 
-    def resolve(self, fn: IRFunction, instr: IRInstruction) -> Tuple[Optional[str], int]:
-        """Project function called by ``instr`` and the number of bound leading params."""
+    def resolve(self, fn: IRFunction, instr: IRInstruction) -> List[Tuple[str, int]]:
+        """Project functions ``instr`` may call, each with its number of bound leading params."""
+        types = self.types_for(fn)
+        mtypes = self.module_types(fn.module)
+        return self._resolve(fn, instr, lambda name: types.get(name, set()) or (
+            mtypes.get(name, set()) if name not in fn.locals else set()))
+
+    @staticmethod
+    def _bound(target: IRFunction, default: int) -> int:
+        if any("staticmethod" in d for d in target.decorators):
+            return 0
+        if any("classmethod" in d for d in target.decorators):
+            return 1
+        return default
+
+    def _resolve(self, fn: IRFunction, instr: IRInstruction, tget) -> List[Tuple[str, int]]:
         c = instr.call
         if c is None:
-            return None, 0
+            return []
         if c.receiver is None:
             name = c.callee
             if instr.meta.get("local_callable") == "1":
@@ -472,35 +659,46 @@ class TaintEngine:
                 while scope is not None:
                     q = self._makefunc.get(scope.qualname, {}).get(name)
                     if q:
-                        return q, 0
+                        return [(q, 0)]
                     scope = self.functions.get(scope.enclosing) if scope.enclosing else None
-                return None, 0
+                return []
             scope = fn
             while scope is not None and scope.enclosing:
                 scope = self.functions.get(scope.enclosing)
                 if scope is not None:
                     q = self._makefunc.get(scope.qualname, {}).get(name)
                     if q:
-                        return q, 0
-            if name in self._top_level and name in self.functions:
-                return name, 0
-            if name in self._classes:
-                init = f"{name}.__init__"
-                return (init, 1) if init in self.functions else (None, 0)
-            return None, 0
+                        return [(q, 0)]
+            for cand in (self.qn(fn.module, name), name):
+                if cand in self._top_level:
+                    return [(cand, 0)]
+                if cand in self._classes:
+                    init = f"{cand}.__init__"
+                    return [(init, 1)] if init in self.functions else []
+                if cand in self.functions and self.functions[cand].class_name:
+                    # imported ``Cls.method(...)``: static/class method called on the class
+                    return [(cand, self._bound(self.functions[cand], 0))]
+            return []
         recv = instr.meta.get("receiver_name")
         if recv in ("self", "cls") and fn.class_name and c.method:
             cls_prefix = fn.qualname.rsplit(".", 1)[0]
             q = f"{cls_prefix}.{c.method}"
             if q in self.functions:
-                return q, (0 if any("staticmethod" in d for d in self.functions[q].decorators) else 1)
-        if recv in self._classes and c.method:
-            q = f"{recv}.{c.method}"
-            if q in self.functions:
-                callee = self.functions[q]
-                bound = 1 if any("classmethod" in d for d in callee.decorators) else 0
-                return q, bound
-        return None, 0
+                return [(q, self._bound(self.functions[q], 1))]
+        if recv and c.method and recv not in fn.locals:
+            for cls in (self.qn(fn.module, recv), recv):
+                q = f"{cls}.{c.method}"
+                if cls in self._classes and q in self.functions:
+                    return [(q, self._bound(self.functions[q], 0))]
+        if c.method and c.receiver:
+            targets = []
+            for t in sorted(tget(c.receiver)):
+                if t.startswith("class:"):
+                    q = f"{t[6:]}.{c.method}"
+                    if q in self.functions:
+                        targets.append((q, self._bound(self.functions[q], 1)))
+            return targets
+        return []
 
     def is_route(self, fn: IRFunction) -> bool:
         return any(self._route_re.search(d + "(") or self._route_re.search(d) for d in fn.decorators)
@@ -540,6 +738,199 @@ class _FnCtx:
         self.callees: Set[str] = set()
         self._recorded: Set[tuple] = set()
         self._cls = fn.qualname.rsplit(".", 1)[0] if fn.class_name else None
+        self.cross_block_temps = self._cross_block_temps()
+
+    def _cross_block_temps(self) -> Set[str]:
+        """Temporaries read in a block other than the one defining them."""
+        home: Dict[str, str] = {}
+        for b in self.fn.blocks:
+            for i in b.instructions:
+                if i.result and re.match(r"^t\d+$", i.result):
+                    home[i.result] = b.label
+        out: Set[str] = set()
+        for b in self.fn.blocks:
+            for i in b.instructions:
+                for o in i.operands:
+                    if o in home and home[o] != b.label:
+                        out.add(o)
+                if i.op == IROpcode.BRANCH and i.operands and i.operands[0] in home:
+                    out.add(i.operands[0])     # read by edge feasibility after the block
+        return out
+
+    def prune(self, state: State) -> State:
+        """Drop untainted plain variables and block-local temporaries from a block's output.
+
+        Absence means "untainted" for locals (``get`` returns EMPTY for them); strong-update
+        keys such as ``obj.attr`` keep explicit empty values because their absence means
+        "fall back to the base object's taint".
+        """
+        out: State = {}
+        for var, v in state.items():
+            name = var[3:] if var[:1] == "#" else var
+            if not v and "." not in var:
+                continue
+            if re.match(r"^t\d+$", name) and name not in self.cross_block_temps:
+                continue
+            out[var] = v
+        return out
+
+    # ── constants and container shapes ──────────────────────────────────
+
+    def cval(self, state: State, name: Optional[str]):
+        if not name:
+            return NOVAL
+        if name in self.consts:
+            return self.consts[name]
+        a = state.get("#c:" + name)
+        return a[1] if a is not None and a[0] == "c" else NOVAL
+
+    def constlike(self, state: State, name: Optional[str]) -> bool:
+        """True when every value reaching ``name`` is a literal (one or several)."""
+        if not name:
+            return False
+        return name in self.consts or ("#c:" + name) in state
+
+    def shape(self, state: State, name: Optional[str]):
+        return state.get("#s:" + name) if name else None
+
+    # ── object aliases ("#a:x" = other names bound to the same object) ──
+
+    @staticmethod
+    def aliases(state: State, name: Optional[str]) -> frozenset:
+        a = state.get("#a:" + name) if name else None
+        return a[1] if a else frozenset()
+
+    def detach_alias(self, state: State, name: str) -> None:
+        for m in self.aliases(state, name):
+            rest = self.aliases(state, m) - {name}
+            if rest:
+                state["#a:" + m] = ("a", rest)
+            else:
+                state.pop("#a:" + m, None)
+        state.pop("#a:" + name, None)
+
+    def bind_alias(self, state: State, target: str, source: str) -> None:
+        group = (self.aliases(state, source) | {source}) - {target}
+        for m in group:
+            state["#a:" + m] = ("a", (self.aliases(state, m) | {target}) - {m})
+        state["#a:" + target] = ("a", frozenset(group))
+
+    def taint_object(self, state: State, name: str, added: TaintValue, attr: Optional[str] = None) -> None:
+        """Mutation through ``name`` (or ``name.attr``) is visible through every alias."""
+        for m in {name} | self.aliases(state, name):
+            if attr is None:
+                state[m] = join_values(self.get(state, m), added)
+            elif m != name:
+                key = f"{m}.{attr}"
+                state[key] = join_values(state.get(key, self.get(state, m)), added)
+
+    def set_aux(self, state: State, name: Optional[str], const=NOVAL, shape=None) -> None:
+        if not name or name == RETURN_VAR:
+            return
+        if _is_user(name) and "#a:" + name in state:
+            self.detach_alias(state, name)
+        state.pop("#c:" + name, None)
+        state.pop("#s:" + name, None)
+        state.pop("#f:" + name, None)
+        if const is not NOVAL and cv.is_literal(const):
+            state["#c:" + name] = ("c", const)
+        if shape is not None:
+            state["#s:" + name] = shape
+
+    def feasible(self, pred_label: str, succ_label: str, out: State) -> bool:
+        """False when a branch on a known constant can never take the edge pred → succ."""
+        pred = self.fn.get_block(pred_label)
+        term = pred.instructions[-1] if pred and pred.instructions else None
+        if term is None or term.op != IROpcode.BRANCH:
+            return True
+        kind = term.meta.get("kind")
+        c = self.cval(out, term.operands[0] if term.operands else None)
+        if c is NOVAL:
+            return True
+        if kind in ("if", "while"):
+            try:
+                truth = bool(c)
+            except Exception:
+                return True
+            if succ_label == term.operands[1]:
+                return truth
+            if succ_label == term.operands[2]:
+                return not truth
+            return True
+        if kind == "match":
+            cases = term.operands[1:]
+            chosen = None
+            for lbl in cases:
+                mv = self.fn.get_block(lbl).meta.get("match_values", "unknown")
+                if mv == "unknown":
+                    return True
+                if mv == "wildcard":
+                    chosen = lbl
+                    break
+                try:
+                    vals = ast.literal_eval(mv)
+                except Exception:
+                    return True
+                if any(_same_const(c, v) or (type(c) in (int, float) and type(v) in (int, float) and c == v)
+                       for v in vals):
+                    chosen = lbl
+                    break
+            if chosen is not None:
+                return succ_label == chosen
+            return succ_label not in cases
+        return True
+
+    def _const_of_binop(self, state: State, instr: IRInstruction):
+        ops = instr.operands
+        vals = [self.cval(state, o) for o in ops]
+        operator = instr.meta.get("operator", "")
+        if instr.meta.get("kind") == "compare":
+            return NOVAL if any(v is NOVAL for v in vals) else cv.compare(operator.split(","), vals)
+        if operator in ("And", "Or"):
+            # Python returns one operand; it is known once the deciding operands are known.
+            result = NOVAL
+            for v in vals:
+                if v is NOVAL:
+                    return NOVAL
+                result = v
+                if (operator == "And" and not v) or (operator == "Or" and v):
+                    return v
+            return result
+        if len(vals) == 2 and NOVAL not in (vals[0], vals[1]) and vals[0] is not NOVAL and vals[1] is not NOVAL:
+            return cv.binop(operator, vals[0], vals[1])
+        return NOVAL
+
+    def _boolop_selected(self, state: State, instr: IRInstruction) -> Optional[str]:
+        """Operand returned by ``a and b`` / ``a or b`` when decidable from constants."""
+        operator = instr.meta.get("operator", "")
+        if operator not in ("And", "Or"):
+            return None
+        for o in instr.operands[:-1]:
+            v = self.cval(state, o)
+            if v is NOVAL:
+                return None
+            if (operator == "And" and not v) or (operator == "Or" and v):
+                return o
+        return instr.operands[-1] if instr.operands else None
+
+    def _element(self, shape, index):
+        """(taint, const) of a list/dict element, or None if not determinable."""
+        if shape is None or index is NOVAL:
+            return None
+        kind, elems = shape
+        if kind == "l":
+            if isinstance(index, int) and not isinstance(index, bool) and -len(elems) <= index < len(elems):
+                return elems[index]
+            return None
+        for k, t, c in elems:
+            if _same_const(k, index):
+                return (t, c)
+        return (EMPTY, NOVAL)          # missing key: KeyError at runtime, no data flows
+
+    def _drop_shapes_of(self, state: State, names) -> None:
+        for n in names:
+            if n and _is_user(n):
+                state.pop("#s:" + n, None)
 
     # ── state access ────────────────────────────────────────────────────
 
@@ -558,8 +949,8 @@ class _FnCtx:
             if name in scope.locals and scope is not self.fn:
                 break
             scope = self.e.functions.get(scope.enclosing) if scope.enclosing else None
-        if self.fn is not self.e.module_fn:
-            return self.e.globals.get(name, EMPTY)
+        if not self.e.is_module_body(self.fn):
+            return self.e.globals.get(self.fn.module, {}).get(name, EMPTY)
         return EMPTY
 
     def step(self, instr: IRInstruction, kind: str, text: Optional[str] = None) -> Step:
@@ -611,6 +1002,11 @@ class _FnCtx:
             elif r.kind.startswith("charset:"):
                 ctxs = frozenset(r.kind.split(":", 1)[1].split(","))
                 state[r.var] = remove_contexts(v, ctxs)
+            elif r.kind == "dotdot_check":
+                why = "only a '..' substring check guards this path (absolute paths, encodings "                       "and other separators are not covered)"
+                note = Step(term.lineno, term.col, "check", f"{why}: {term.meta.get('src', '')}", self.q)
+                state[r.var] = {k: replace(i, unc=i.unc | {why}, trace=i.trace + (note,))
+                                if "path" in i.contexts else i for k, i in v.items()}
             elif r.kind == "path_prefix":
                 new: TaintValue = {}
                 for k, info in v.items():
@@ -648,26 +1044,63 @@ class _FnCtx:
         if op == IROpcode.ASSIGN:
             if "const" in instr.meta:
                 state[res] = {}
+                self.set_aux(state, res, self.consts.get(res, NOVAL))
                 return
-            v = self.get(state, instr.operands[0]) if instr.operands else {}
+            src = instr.operands[0] if instr.operands else None
+            v = self.get(state, src) if src else {}
             if v and res and _is_user(res):
                 v = add_step(v, self.step(instr, "assign"))
             elif v and res == RETURN_VAR:
                 v = add_step(v, self.step(instr, "return", f"returned: {instr.meta.get('src', '')}"))
+            shape = self.shape(state, src)
+            if shape is not None and src and _is_user(src):
+                # b = a aliases one object: shapes would diverge on mutation, so drop both.
+                state.pop("#s:" + src, None)
+                shape = None
+            const = self.cval(state, src)
+            cset = state.get("#c:" + src) if src else None
+            desc = self.callable_of(state, src) if src else None
             state[res] = v
+            self.set_aux(state, res, const, shape)
+            if const is NOVAL and cset is not None and cset[0] == "cs" and res != RETURN_VAR:
+                state["#c:" + res] = cset
+            if desc is not None and res and _is_user(res):
+                state["#f:" + res] = ("f", desc)
+            if src and _is_user(src) and res and _is_user(res) and const is NOVAL and src != res:
+                self.bind_alias(state, res, src)
             return
         if op in (IROpcode.BINOP, IROpcode.UNOP, IROpcode.BUILD):
-            v = drop_markers(self._ops_value(state, instr))
+            v, const, shape = self._expr_value(state, instr)
+            v = drop_markers(v)
             if v and res and _is_user(res):
                 v = add_step(v, self.step(instr, "assign"))
             state[res] = v
+            self.set_aux(state, res, const, shape)
             if record and v:
                 self._maybe_sql_build(instr, v)
             return
         if op == IROpcode.SUBSCR:
-            v = self.get(state, instr.operands[0]) if instr.operands else {}
-            state[res] = v if instr.meta.get("unpack") or instr.meta.get("index") == "iter" \
-                else drop_markers(v)
+            base = instr.operands[0] if instr.operands else None
+            v = self.get(state, base) if base else {}
+            const = NOVAL
+            index = instr.meta.get("index")
+            if instr.meta.get("unpack"):
+                idx = int(index) if index and index.lstrip("-").isdigit() else NOVAL
+            elif index == "iter":
+                idx = NOVAL
+            else:
+                idx = self.cval(state, instr.operands[1]) if len(instr.operands) > 1 else NOVAL
+            elem = self._element(self.shape(state, base), idx)
+            if elem is not None:
+                v, const = elem
+            else:
+                bc = self.cval(state, base)
+                if bc is not NOVAL and idx is not NOVAL:
+                    const = cv.subscript(bc, idx)
+                    if const is not NOVAL:
+                        v = {}
+            state[res] = v if instr.meta.get("unpack") or index == "iter" else drop_markers(v)
+            self.set_aux(state, res, const)
             return
         if op == IROpcode.ATTR:
             state[res] = self._attr(instr, state)
@@ -685,8 +1118,65 @@ class _FnCtx:
             state[res] = {}
             return
         if op == IROpcode.CALL:
-            self._call(instr, state, record)
+            self._call(self._devirtualize(instr, state), state, record)
             return
+
+    def _expr_value(self, state: State, instr: IRInstruction):
+        """(taint, const, shape) of a BINOP / UNOP / BUILD instruction."""
+        ops = instr.operands
+        kind = instr.meta.get("kind")
+        if instr.op == IROpcode.BINOP:
+            const = self._const_of_binop(state, instr)
+            if const is not NOVAL and instr.meta.get("kind") == "compare":
+                return {}, const, None
+            sel = self._boolop_selected(state, instr)
+            if sel is not None:
+                return self.get(state, sel), self.cval(state, sel), None
+            return self._ops_value(state, instr), const, None
+        if instr.op == IROpcode.UNOP:
+            c = self.cval(state, ops[0]) if ops else NOVAL
+            const = cv.unop(instr.meta.get("operator", ""), c) if c is not NOVAL else NOVAL
+            return self._ops_value(state, instr), const, None
+        # BUILD
+        if kind == "ifexp" and len(ops) >= 3:
+            test = self.cval(state, ops[2])
+            if test is not NOVAL:
+                chosen = ops[0] if test else ops[1]
+                return self.get(state, chosen), self.cval(state, chosen), None
+            return self._ops_value(state, instr), NOVAL, None
+        consts = [self.cval(state, o) for o in ops]
+        if kind == "slice":
+            if all(c is not NOVAL for c in consts) and len(consts) <= 3:
+                return {}, slice(*consts), None
+            return {}, NOVAL, None
+        if instr.meta.get("starred"):
+            return self._ops_value(state, instr), NOVAL, None
+        if kind in ("list", "tuple"):
+            self._drop_shapes_of(state, ops)
+            shape = ("l", tuple((self.get(state, o), c) for o, c in zip(ops, consts)))
+            const = NOVAL
+            if kind == "tuple" and all(c is not NOVAL for c in consts):
+                const = tuple(consts)       # lists are mutable: never tracked as constants
+            return self._ops_value(state, instr), const, shape
+        if kind == "dict":
+            n = int(instr.meta.get("nkeys", "-1"))
+            if n >= 0 and len(ops) == 2 * n:
+                keys, vals = ops[:n], ops[n:]
+                kc = [self.cval(state, k) for k in keys]
+                if all(k is not NOVAL for k in kc):
+                    try:
+                        hashable = all(hash(k) is not None for k in kc)
+                    except TypeError:
+                        hashable = False
+                    if hashable and len(set(map(repr, kc))) == len(kc):
+                        shape = ("d", tuple((k, self.get(state, v), self.cval(state, v))
+                                            for k, v in zip(kc, vals)))
+                        return self.get_union(state, vals), NOVAL, shape
+            return self._ops_value(state, instr), NOVAL, None
+        return self._ops_value(state, instr), NOVAL, None
+
+    def get_union(self, state: State, names) -> TaintValue:
+        return join_values(*[self.get(state, n) for n in names])
 
     def _attr(self, instr: IRInstruction, state: State) -> TaintValue:
         path = instr.meta.get("path")
@@ -723,12 +1213,45 @@ class _FnCtx:
             key = f"{base_name}.{instr.meta.get('attr', '')}"
             v = add_step(val, self.step(instr, "store")) if val else val
             state[key] = v
+            for m in self.aliases(state, base_name):      # same object: same attribute
+                state[f"{m}.{instr.meta.get('attr', '')}"] = v
             if record and base_name in ("self", "cls") and self._cls and v:
                 fk = (self._cls, instr.meta.get("attr", ""))
                 self.field_writes[fk] = join_values(self.field_writes.get(fk, {}), v)
-        elif kind == "subscr" and base_name and val:
-            state[base_name] = join_values(self.get(state, base_name),
-                                           add_step(val, self.step(instr, "store")))
+        elif kind == "subscr" and base_name:
+            if record and val and re.search(SESSION_STORE_PATTERN, base_name):
+                self._session_store_hit(instr, base_name, val)
+            stored = add_step(val, self.step(instr, "store")) if val else val
+            if val:
+                self.taint_object(state, base_name, stored)
+                for m in self.aliases(state, base_name):
+                    state.pop("#s:" + m, None)
+            shape = self.shape(state, base_name)
+            if shape is not None:
+                key = self.cval(state, instr.operands[2]) if len(instr.operands) > 2 else NOVAL
+                const = self.cval(state, instr.operands[0])
+                new_shape = None
+                if key is not NOVAL:
+                    kind_s, elems = shape
+                    if kind_s == "d":
+                        try:
+                            hash(key)
+                            if any(_same_const(e[0], key) for e in elems):
+                                new_shape = ("d", tuple((key, stored, const) if _same_const(e[0], key)
+                                                        else e for e in elems))
+                            else:
+                                new_shape = ("d", elems + ((key, stored, const),))
+                        except TypeError:
+                            new_shape = None
+                    elif isinstance(key, int) and not isinstance(key, bool) and -len(elems) <= key < len(elems):
+                        lst = list(elems)
+                        lst[key] = (stored, const)
+                        new_shape = ("l", tuple(lst))
+                if new_shape is None:
+                    state.pop("#s:" + base_name, None)
+                else:
+                    state["#s:" + base_name] = new_shape
+            state.pop("#c:" + base_name, None)
 
     # ── sources ─────────────────────────────────────────────────────────
 
@@ -747,7 +1270,7 @@ class _FnCtx:
                 ok = heuristic_only and re.search(pat, name) is not None
             else:
                 ok = False
-            if not ok:
+            if not ok or any(name == x or name.startswith(x + ".") for x in spec.exclude):
                 continue
             key = self.e.origin(("src", self.q, instr.uid), kind="source",
                                 description=f"{spec.description} ({name})", trust=spec.trust,
@@ -755,7 +1278,7 @@ class _FnCtx:
                                 heuristic=spec.heuristic)
             step = Step(instr.lineno, instr.col, "source",
                         f"untrusted {spec.description}: {instr.meta.get('src', name)}", self.q)
-            return {key: TaintInfo(ALL_CONTEXTS, trace=(step,))}
+            return {key: TaintInfo(spec.contexts or ALL_CONTEXTS, trace=(step,))}
         return {}
 
     # ── calls ───────────────────────────────────────────────────────────
@@ -776,18 +1299,21 @@ class _FnCtx:
 
         result: TaintValue
         src = self._source_for(callee, instr, is_call=True) if callee and c.receiver is None else {}
-        qual, bound = self.e.resolve(self.fn, instr)
+        targets = self.e.resolve(self.fn, instr)
         sanitizer = self.e.reg.sanitizer_for(callee if c.receiver is None else "", c.method,
                                              c.receiver is not None)
         if src:
             result = src
-        elif qual is not None:
-            binding = self._bind(qual, bound, c, recv_v, arg_vs, kw_vs, star_vs)
-            result = self._instantiate(qual, binding, instr)
-            if record:
-                self.callees.add(qual)
-                self._instantiate_hits(qual, binding, instr)
-                self._instantiate_envs(qual, binding, instr)
+        elif targets:
+            parts = []
+            for qual, bound in targets:
+                binding = self._bind(qual, bound, c, recv_v, arg_vs, kw_vs, star_vs)
+                parts.append(self._instantiate(qual, binding, instr))
+                if record:
+                    self.callees.add(qual)
+                    self._instantiate_hits(qual, binding, instr)
+                    self._instantiate_envs(qual, binding, instr)
+            result = join_values(*parts)
         elif sanitizer is not None:
             base = recv_v if (c.receiver and sanitizer.methods) else join_values(*arg_vs, *kw_vs.values(), *star_vs)
             missing = sorted(ALL_CONTEXTS - sanitizer.clears)
@@ -802,6 +1328,8 @@ class _FnCtx:
             result = add_step(result, self.step(instr, "sanitizer",
                                                 f"{label}() canonicalises the path (no boundary "
                                                 f"check yet)")) if result else result
+        elif c.receiver and c.method in RECEIVER_ONLY_METHODS:
+            result = recv_v
         elif callee in PROPAGATOR_CALLEES or (is_method and c.method in PROPAGATOR_METHODS):
             result = drop_markers(inputs)
         elif is_method and c.method in MUTATOR_METHODS:
@@ -809,8 +1337,14 @@ class _FnCtx:
             rn = instr.meta.get("receiver_name")
             added = join_values(*arg_vs, *kw_vs.values(), *star_vs)
             if rn and added:
-                state[rn] = join_values(self.get(state, rn), add_step(added, self.step(instr, "store")))
+                self.taint_object(state, rn, add_step(added, self.step(instr, "store")))
         else:
+            if inputs and self.e.reg.unknown_calls_mutate_args:
+                # Opt-in: an unknown callee may store any argument into a container argument.
+                for a in list(c.args) + list(c.keywords.values()):
+                    if a and _is_user(a) and a in self.fn.locals:
+                        self.taint_object(state, a, add_step(inputs, self.step(
+                            instr, "store", f"may be mutated by unresolved call {label}()")))
             if inputs:
                 why = f"unresolved call {label}()"
                 result = {k: replace(i, unc=i.unc | {why}, markers=frozenset())
@@ -823,7 +1357,11 @@ class _FnCtx:
             # The response/markup object was checked as an HTML sink here; returning it from
             # a route is the same flow and must not be reported twice.
             result = remove_contexts(result, frozenset({"html"}))
+        precise, const, shape = self._call_precision(instr, state)
+        if precise is not None:
+            result = precise
         state[res] = result
+        self.set_aux(state, res, const, shape)
         if record:
             self._check_sinks(instr, state, recv_v, arg_vs, kw_vs)
             if c.method == "format" and c.receiver and result:
@@ -833,6 +1371,158 @@ class _FnCtx:
                     if keys:
                         self.sql_builds.append(SqlBuild(self.q, instr.lineno, instr.col, keys,
                                                         instr.meta.get("src", "")))
+
+    # ── statically resolvable callables (aliases, getattr, partial) ─────
+
+    def callable_of(self, state: State, operand: Optional[str], depth: int = 0):
+        """
+        Descriptor of the callable held by ``operand`` when it is statically known:
+        ("func", dotted_name) | ("method", receiver_operand, method, receiver_name) |
+        ("partial", inner_descriptor, bound_arg_operands). None otherwise.
+        """
+        if not operand or depth > 4:
+            return None
+        a = state.get("#f:" + operand)
+        if a is not None:
+            return a[1]
+        d = self.defs.get(operand)
+        if d is None:
+            if not _is_user(operand) or operand in self.fn.locals:
+                return None
+            return ("func", operand)            # free name: builtin, global or project function
+        if d.op == IROpcode.ATTR:
+            if d.meta.get("path"):
+                return ("func", d.meta["path"])
+            return ("method", d.operands[0] if d.operands else "", d.meta.get("attr", ""),
+                    d.meta.get("base_name"))
+        if d.op == IROpcode.CALL and d.call is not None:
+            c = d.call
+            if c.callee == "getattr" and len(c.args) >= 2 and not c.keywords:
+                name = self.cval(state, c.args[1])
+                if not isinstance(name, str) or not name.isidentifier():
+                    return None                  # computed attribute name: not resolved
+                obj = c.args[0]
+                od = self.defs.get(obj)
+                if od is not None and od.op == IROpcode.ATTR and od.meta.get("path"):
+                    return ("func", f"{od.meta['path']}.{name}")
+                return ("method", obj, name, obj if _is_user(obj) else None)
+            if c.callee == "functools.partial" and c.args and not c.star_args:
+                inner = self.callable_of(state, c.args[0], depth + 1)
+                if inner is not None:
+                    return ("partial", inner, tuple(c.args[1:]))
+        return None
+
+    def _devirtualize(self, instr: IRInstruction, state: State) -> IRInstruction:
+        """Rewrite a call through a known callable value into the equivalent direct call."""
+        c = instr.call
+        if c is None:
+            return instr
+        if instr.meta.get("local_callable") == "1":
+            holder = c.callee
+            if self.e.resolve(self.fn, instr):
+                return instr                     # nested project function: already resolved
+        elif instr.meta.get("computed_callee") == "1":
+            holder = c.receiver
+        else:
+            return instr
+        desc = self.callable_of(state, holder)
+        if desc is None:
+            return instr
+        args = list(c.args)
+        while desc[0] == "partial":
+            args = list(desc[2]) + args
+            desc = desc[1]
+        meta = {k: v for k, v in instr.meta.items() if k not in ("local_callable", "computed_callee",
+                                                                  "receiver_name")}
+        if desc[0] == "func":
+            name = desc[1]
+            info = CallInfo(callee=name, raw_callee=c.raw_callee, method=name.rsplit(".", 1)[-1]
+                            if "." in name else None, args=args, keywords=dict(c.keywords),
+                            const_kwargs=dict(c.const_kwargs), star_args=list(c.star_args))
+        else:
+            _, recv, method, recv_name = desc
+            info = CallInfo(callee="", raw_callee=c.raw_callee, method=method, receiver=recv,
+                            args=args, keywords=dict(c.keywords), const_kwargs=dict(c.const_kwargs),
+                            star_args=list(c.star_args))
+            if recv_name:
+                meta["receiver_name"] = recv_name
+        meta["callee"] = info.callee or f"{info.receiver}.{info.method}"
+        meta["devirtualized"] = c.raw_callee
+        operands = ([info.receiver] if info.receiver else []) + info.args + \
+            list(info.keywords.values()) + info.star_args
+        return replace(instr, call=info, meta=meta, operands=operands)
+
+    def _call_precision(self, instr: IRInstruction, state: State):
+        """
+        Precise result for list/dict methods on a tracked container and pure builtins on
+        constants. Returns (taint or None, const). Containers passed to any other call lose
+        their shape (the callee may mutate them).
+        """
+        c = instr.call
+        rn = instr.meta.get("receiver_name")
+        shape = self.shape(state, rn) if rn else None
+        precise, const = None, NOVAL
+        handled = False
+        if c.receiver is None and c.callee in _CONFIGPARSER_TYPES and not c.args:
+            return None, NOVAL, ("d", ())        # empty (section, option) store
+        if shape is not None and shape[0] == "d" and c.method in ("set", "get", "add_section",
+                                                                  "has_section", "has_option") \
+                and not c.keywords and not c.star_args:
+            args = [self.cval(state, a) for a in c.args]
+            elems = shape[1]
+            if c.method == "set" and len(c.args) == 3 and args[0] is not NOVAL and args[1] is not NOVAL:
+                key = (args[0], args[1])
+                val = (self.get(state, c.args[2]), args[2])
+                if any(_same_const(k, key) for k, _, _ in elems):
+                    elems = tuple((k, *val) if _same_const(k, key) else (k, t, cc) for k, t, cc in elems)
+                else:
+                    elems = elems + ((key, *val),)
+                state["#s:" + rn] = ("d", elems)
+                return {}, NOVAL, None
+            if c.method == "get" and len(c.args) >= 2 and args[0] is not NOVAL and args[1] is not NOVAL:
+                found = [(t, cc) for k, t, cc in elems if _same_const(k, (args[0], args[1]))]
+                return (found[0][0], found[0][1], None) if found else ({}, NOVAL, None)
+            if c.method in ("add_section", "has_section", "has_option"):
+                return {}, NOVAL, None
+        if shape is not None and c.method and not c.keywords and not c.star_args:
+            kind, elems = shape
+            args = [self.cval(state, a) for a in c.args]
+            if kind == "l" and c.method == "append" and len(c.args) == 1:
+                state["#s:" + rn] = ("l", elems + ((self.get(state, c.args[0]), args[0]),))
+                precise, handled = {}, True
+            elif kind == "l" and c.method == "pop" and len(c.args) <= 1:
+                i = args[0] if c.args else -1
+                if isinstance(i, int) and not isinstance(i, bool) and -len(elems) <= i < len(elems):
+                    lst = list(elems)
+                    t, const = lst.pop(i)
+                    state["#s:" + rn] = ("l", tuple(lst))
+                    precise, handled = t, True
+            elif kind == "l" and c.method == "insert" and len(c.args) == 2 and isinstance(args[0], int) \
+                    and not isinstance(args[0], bool):
+                lst = list(elems)
+                lst.insert(args[0], (self.get(state, c.args[1]), args[1]))
+                state["#s:" + rn] = ("l", tuple(lst))
+                precise, handled = {}, True
+            elif kind == "d" and c.method == "get" and 1 <= len(c.args) <= 2 and args[0] is not NOVAL:
+                found = [(t, cc) for k, t, cc in elems if _same_const(k, args[0])]
+                if found:
+                    precise, const = found[0]
+                elif len(c.args) == 2:
+                    precise, const = self.get(state, c.args[1]), args[1]
+                else:
+                    precise = {}
+                handled = True
+        if not handled:
+            # Any container reaching a call by reference may be mutated there.
+            self._drop_shapes_of(state, [c.receiver] + list(c.args) + list(c.keywords.values())
+                                 + list(c.star_args))
+            if c.receiver is None and c.callee in ("len", "str", "int", "float", "abs", "bool", "ord",
+                                                    "chr", "min", "max", "repr") \
+                    and not c.keywords and not c.star_args:
+                vals = [self.cval(state, a) for a in c.args]
+                if c.args and all(v is not NOVAL for v in vals):
+                    const = cv.pure_call(c.callee, vals)
+        return precise, const, None
 
     def _bind(self, qual, bound, c, recv_v, arg_vs, kw_vs, star_vs) -> Dict[int, TaintValue]:
         callee = self.e.functions[qual]
@@ -962,8 +1652,10 @@ class _FnCtx:
                 resolution = "exact"
             elif c.receiver is not None and c.method and c.method in spec.methods:
                 rtypes = self.types.get(c.receiver, set()) | (
-                    self.e._module_types.get(instr.meta.get("receiver_name", ""), set())
+                    self.e.module_types(self.fn.module).get(instr.meta.get("receiver_name", ""), set())
                     if instr.meta.get("receiver_name") not in self.fn.locals else set())
+                if set(spec.unless_receiver) & rtypes:
+                    continue
                 if spec.receiver is None or spec.receiver in rtypes:
                     resolution = "exact" if spec.receiver else "method-name"
                 elif spec.method_only_ok:
@@ -986,9 +1678,10 @@ class _FnCtx:
                         operation=spec.operation, operand_role=role, origin_key=okey,
                         info=replace(info, trace=info.trace + (sink_step,)),
                         resolution=resolution, factors=tuple(factors), guards=tuple(instr.guards),
-                        severity_override=sev,
+                        severity_override=sev or spec.severity,
                     ))
-                if not hit_any and spec.api_fallback and not self._is_const(operand):
+                if (not hit_any and spec.api_fallback and not self._is_const(operand)
+                        and not self.constlike(state, operand)):
                     self.api_uses.append(ApiUse(spec.rule_id, self.q, instr.uid, instr.lineno,
                                                 instr.col, c.callee or c.raw_callee,
                                                 spec.operation, tuple(instr.guards)))
@@ -1029,7 +1722,16 @@ class _FnCtx:
             mt = c.const_kwargs.get("mimetype") or c.const_kwargs.get("content_type")
             if mt is not None and "html" not in mt.lower():
                 return []
-            return out
+            narrowed = []
+            for o, r, f, s in out:
+                d = self.defs.get(o)
+                if d is not None and d.op == IROpcode.BUILD and d.meta.get("kind") == "tuple" \
+                        and d.operands and not d.meta.get("starred"):
+                    # make_response((body, status_or_headers, ...)): only the body is HTML
+                    narrowed.append((d.operands[0], r + " (response body)", f, s))
+                else:
+                    narrowed.append((o, r, f, s))
+            return narrowed
         if spec.condition == "exec_program":
             return [(o, "executable", ["note:the attacker selects the program"], "high")
                     for o, r, f, s in out]
@@ -1043,6 +1745,19 @@ class _FnCtx:
                     return []
             return out
         return out
+
+    def _session_store_hit(self, instr: IRInstruction, base_name: str, val: TaintValue) -> None:
+        for okey, info in val.items():
+            if "weakrand" not in info.contexts:
+                continue
+            step = self.step(instr, "sink", f"stored into security-sensitive state {base_name}[...]")
+            self._add_hit(Hit(
+                rule_id="SEC011", function=self.q, sink_uid=instr.uid, lineno=instr.lineno,
+                col=instr.col, sink_name=f"{base_name}[...]", operation="session/cookie state",
+                operand_role="stored value", origin_key=okey,
+                info=replace(info, trace=info.trace + (step,)), resolution="method-name",
+                factors=("medium:security relevance inferred from the container name "
+                         f"'{base_name}'",), guards=tuple(instr.guards)))
 
     def route_return_hits(self, ret: TaintValue) -> None:
         for okey, info in ret.items():

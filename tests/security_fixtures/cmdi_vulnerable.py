@@ -80,4 +80,17 @@ def nested_helper():
 
 def dynamic_lookup():
     cmd = request.args["cmd"]
-    getattr(os, "system")(cmd)  # expect: SEC002 (known limitation)
+    getattr(os, "system")(cmd)  # expect: SEC002
+
+
+def apply_callback(fn, value):
+    return fn(value)  # expect: SEC002 (known limitation)
+
+
+def callback_caller():
+    apply_callback(os.system, request.args["cmd"])
+
+
+def computed_lookup():
+    name = request.args["fn"]
+    getattr(os, name)(request.args["arg"])  # expect: SEC002 (known limitation)

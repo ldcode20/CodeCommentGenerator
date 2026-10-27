@@ -238,6 +238,8 @@ class IRFunction:
     unsupported: List[str] = field(default_factory=list)
     end_lineno: int = 0
     enclosing: Optional[str] = None
+    module: str = ""          # dotted module name in project analysis ("" for single files)
+    source_file: str = ""     # file the function was lowered from
 
     # ── Convenience ──────────────────────────────────────────────────
 
@@ -279,6 +281,8 @@ class IRModule:
     functions: List[IRFunction] = field(default_factory=list)
     imports: Dict[str, str] = field(default_factory=dict)
     module_body: Optional[IRFunction] = None
+    module_name: str = ""
+    classes: List[str] = field(default_factory=list)     # qualified class names
 
     def get_function(self, name: str) -> Optional[IRFunction]:
         for f in self.functions:

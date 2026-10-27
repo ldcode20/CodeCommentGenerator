@@ -37,3 +37,9 @@ def safe_yaml():
 
 def explicit_safe_loader():
     return yaml.load(request.data, Loader=yaml.SafeLoader)  # safe: SEC010
+
+
+def syntax_check_only():
+    src = request.form["src"]
+    compile(src, "<user>", "exec")  # safe: SEC001
+    return "ok"

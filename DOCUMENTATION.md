@@ -1648,7 +1648,7 @@ source_code
 
 | Code | Title | CWE | Severity | Analysis |
 |---|---|---|---|---|
-| SEC001 | Code injection (`eval`/`exec`/`compile`) | CWE-95 | critical | taint (+ dangerous-API use) |
+| SEC001 | Code injection (`eval`/`exec`; `compile` propagates) | CWE-95 | critical | taint (+ dangerous-API use) |
 | SEC002 | OS command injection | CWE-78 | critical | taint |
 | SEC003 | Hardcoded secret | CWE-798 | high | AST |
 | SEC004 | Weak cryptographic hash | CWE-328 | medium | AST |

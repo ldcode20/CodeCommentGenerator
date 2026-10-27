@@ -15,6 +15,7 @@ source (original file, never the annotated output)
    ▼
 ir.lowering.lower_module ── every function, method, nested function + <module> body
    │      real statements/expressions → 3-address IR with line/col on every instruction
+   │      (security.project: many modules, module-qualified names, cross-file calls)
    ▼
 analysis.cfg_builder.build_cfg ── basic blocks, if/loop/break/continue/return/try/raise edges
    │
@@ -131,7 +132,7 @@ confidence; `def read(path): open(path)` is not (ordinary API design).
 
 | Rule | Sink (canonical, after import-alias resolution) | Dangerous operand / condition |
 |---|---|---|
-| SEC001 | `eval`, `exec`, `compile` | arg 1 |
+| SEC001 | `eval`, `exec` (`compile()` only propagates taint into the code object) | arg 1 |
 | SEC002 | `os.system`, `os.popen`, `subprocess.getoutput/getstatusoutput`, `asyncio.create_subprocess_shell` | arg 1 |
 | SEC002 | `subprocess.run/call/check_call/check_output/Popen` | `shell=True`: the command; `shell=<expr>`: medium confidence; no shell: only the executable (string arg, or element 0 of a list literal) |
 | SEC002 | `os.exec*`, `os.spawn*` | the program |
@@ -232,7 +233,7 @@ paths is reported once (shortest trace). AST findings are deduplicated per
 
 | ID | Title | CWE | Base severity | Analysis | Change vs. original scanner |
 |---|---|---|---|---|---|
-| SEC001 | Code injection (`eval/exec/compile`) | CWE-95 | critical | taint (+ api-use) | literal arguments no longer reported; tainted flows confirmed |
+| SEC001 | Code injection (`eval`/`exec`; `compile` propagates) | CWE-95 | critical | taint (+ api-use) | literal arguments no longer reported; tainted flows confirmed |
 | SEC002 | OS command injection | CWE-78 | critical | taint | was "subprocess + `shell=True` somewhere in the function"; now argument-level, covers `os.system/popen/exec*/spawn*`, list vs string, aliases |
 | SEC003 | Hardcoded secret | CWE-798 | high | AST | adds module level, attributes, dict keys, kwargs, comparisons, defaults, key formats (AWS/GitHub/Slack/Stripe/Google/private keys/URL credentials); excludes placeholders, env-var names, prose |
 | SEC004 | Weak hash (MD5/SHA-1) | CWE-328 | medium | AST | import-resolved; `hashlib.new("md5")`; `usedforsecurity=False` suppressed |
@@ -252,94 +253,124 @@ paths is reported once (shortest trace). AST findings are deduplicated per
 
 ## 5. Evaluation
 
-### Dataset
+Three datasets are kept apart (details, provenance and labelling protocol in
+[benchmarks/README.md](benchmarks/README.md)):
 
-`tests/security_fixtures/` — 14 small synthetic programs written for this
-project (no third-party benchmark code; no licensed benchmark was available
-offline). Every class has vulnerable and secure examples using the same APIs,
-covering direct flows, multi-assignment and multi-function flows, branches,
-loops, early returns, sanitised/parameterised flows, wrong-context sanitisers,
-aliases (import and reassignment), unknown library calls, several sinks per
-function, closures (one and two levels), fields, recursion, suppression and a
-malformed file. Cases the analyzer is not designed to handle are labelled
-`(known limitation)` and still counted.
+1. **Synthetic regression fixtures** (`tests/security_fixtures/`, `tests/security_fixtures_project/`)
+   — written with the analyzer; regression tests, not accuracy evidence.
+2. **OWASP BenchmarkPython** (independent labels, generated code) — dev / held-out by
+   template family.
+3. **GHSA real-world fix pairs** (50 advisories, manually labelled from advisory + diff,
+   single annotator, no independent review) — dev / held-out by project.
 
-### Unit and definitions
+Metric definitions everywhere: Precision = TP/(TP+FP), Recall = TP/(TP+FN),
+F1 = 2PR/(P+R), FPR = FP/(FP+TN); zero denominators are reported as `undefined`.
+"Original" = the analyzer at commit `53a0611`, run with the same runner and labels.
 
-Unit: one labelled **(file, line, rule)** site. TP/FN for `# expect:` sites;
-TN for `# safe:` sites with no finding of that rule; FP for any non-suppressed
-finding matching no positive site (at a `# safe:` site or an unlabelled line).
-Precision = TP/(TP+FP), Recall = TP/(TP+FN), F1 = 2PR/(P+R),
-FPR = FP/(FP+TN); zero denominators are reported as `undefined`.
+### 5.1 OWASP BenchmarkPython (unit: test case × category; 877 scored cases)
 
-### Results (74 positive, 52 negative sites)
-
-| Analyzer | Counted | Granularity | TP | FP | TN | FN | Precision | Recall | F1 | FPR |
+| Analyzer | Split | Counted | TP | FP | TN | FN | Precision | Recall | F1 | FPR |
 |---|---|---|---|---|---|---|---|---|---|---|
-| **New analyzer** | confirmed + potential | line | 73 | 0 | 52 | 1 | 1.000 | 0.986 | 0.993 | 0.000 |
-| **New analyzer** | confirmed only | line | 56 | 0 | 52 | 18 | 1.000 | 0.757 | 0.862 | 0.000 |
-| Original scanner | all | line | 1 | 43 | 52 | 73 | 0.023 | 0.014 | 0.017 | 0.453 |
-| Original scanner | all | function (lenient) | 27 | 17 | 39 | 47 | 0.614 | 0.365 | 0.458 | 0.304 |
+| Original | dev | confirmed+potential | 124 | 115 | 267 | 84 | 0.519 | 0.596 | 0.555 | 0.301 |
+| Final, single-file | dev | confirmed+potential | 208 | 43 | 339 | 0 | 0.829 | 1.000 | 0.906 | 0.113 |
+| Final, project | dev | confirmed+potential | 208 | 38 | 344 | 0 | 0.846 | 1.000 | 0.916 | 0.099 |
+| Original | held-out | confirmed+potential | 74 | 41 | 132 | 40 | 0.643 | 0.649 | 0.646 | 0.237 |
+| Final, single-file | held-out | confirmed+potential | 114 | 25 | 148 | 0 | 0.820 | 1.000 | 0.901 | 0.145 |
+| Final, project | held-out | confirmed+potential | 114 | 21 | 152 | 0 | 0.844 | 1.000 | 0.916 | 0.121 |
+| Original | held-out | confirmed | 24 | 24 | 149 | 90 | 0.500 | 0.211 | 0.296 | 0.139 |
+| Final, project | held-out | confirmed | 29 | 5 | 168 | 85 | 0.853 | 0.254 | 0.392 | 0.029 |
 
-Per class (new analyzer, confirmed + potential): every class has precision
-1.000; recall is 1.000 except command injection (13/14 — the
-`getattr(os, "system")(cmd)` known limitation). Runtime for the 14 files
-≈ 0.3–0.4 s, peak traced memory ≈ 1.2 MiB (machine-dependent).
+Excluded categories (out of scope): xpathi 186, xxe 28, securecookie 39, redirect 34,
+trustbound 37, ldapi 29. No analysis errors. Runtime: 79 s single-file, 170 s project
+mode for 1230 files (~200 MB peak traced memory in project mode).
 
-The original scanner reports every issue on the function's `def` line, so at
-line granularity it scores almost nothing; the function-level row is the fair
-comparison.
+**Not an independent held-out.** OWASP has 24 template families and nearly all were
+inspected while debugging on dev; held-out differs in instances, not in templates.
+Recall 1.000 includes many `potential` findings (e.g. all weak-randomness hits, whose
+session relevance is inferred from a container name). Hash (MD5/SHA-1) findings are
+never `confirmed`, because security use of a digest cannot be decided statically.
 
-**How to read these numbers.** The fixtures were written together with the
-analyzer, so near-perfect scores show that the implemented semantics behave as
-designed — they are *not* an estimate of real-world precision/recall. One
-"known limitation" positive (`run = cur.execute; run(q)`) is counted as found
-only because the separate SQL-construction heuristic flags the concatenation
-on that line; the bound-method alias itself is not resolved. As an external
-sanity check the analyzer was run over this repository's own `src/` (≈ 11 k
-lines): after fixing two engine bugs found that way (field-stored parameters
-and a missing `usedforsecurity=False`), it reports one finding, a
-medium-confidence MD5 used as a de-duplication key — a correct pattern match
-whose security impact is nil.
+### 5.2 GHSA real-world fix pairs (unit: case × revision over labelled functions; modelled sinks)
+
+| Analyzer | Split | Counted | TP | FP | TN | FN | Precision | Recall | F1 | FPR |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Original | dev (25) | confirmed+potential | 22 | 10 | 13 | 3 | 0.688 | 0.880 | 0.772 | 0.435 |
+| Final | dev (25) | confirmed+potential | 22 | 6 | 17 | 3 | 0.786 | 0.880 | 0.830 | 0.261 |
+| Original | held-out (14) | confirmed+potential | 10 | 7 | 7 | 4 | 0.588 | 0.714 | 0.645 | 0.500 |
+| **Final** | **held-out (14)** | **confirmed+potential** | 10 | 5 | 9 | 4 | **0.667** | **0.714** | **0.690** | **0.357** |
+| Final | held-out (14) | confirmed | 0 | 0 | 14 | 14 | undefined | 0.000 | undefined | 0.000 |
+
+Including the 11 cases whose sink API is not modelled ("all in category"), final
+held-out confirmed+potential is P 0.667, R 0.571, F1 0.615, FPR 0.286.
+
+**What this says.** On real library code nearly every detection is `potential/low`:
+the attacker-controlled value enters as a parameter of a function with no caller in
+the analysed file, so the analyzer cannot establish a source. At the `confirmed` level
+recall on real code is close to zero (dev 3/25, held-out 0/14). The precision gains
+measured on OWASP largely did **not** transfer: on held-out only the jinja2 sandbox
+model (added for a dev case) changed outcomes, removing false positives on two unseen
+projects. With 14 held-out cases these numbers are indicative only.
+
+Per-case changes original → final: dev patched FPs removed for geopandas
+(`bindparams`), postgraas (psycopg `sql.Identifier`), langflow (`compile` no longer a
+sink), skyvern (sandboxed jinja2); held-out patched FPs removed for spacy-llm and mlflow
+(sandboxed jinja2); changedetection.io (sink not modelled) is now flagged on *both*
+revisions via the new existence-probe sinks — one more TP and one more FP.
+
+### 5.3 Synthetic regression fixtures (unit: labelled (file, line, rule) site)
+
+| Analyzer | Counted | TP | FP | TN | FN | Precision | Recall | F1 | FPR |
+|---|---|---|---|---|---|---|---|---|---|
+| Final | confirmed+potential | 74 | 0 | 53 | 2 | 1.000 | 0.974 | 0.987 | 0.000 |
+| Final | confirmed only | 58 | 0 | 53 | 18 | 1.000 | 0.763 | 0.866 | 0.000 |
+
+The two FNs are the remaining known limitations (callable passed as a callback,
+`getattr` with a computed name). Label changes in this phase, all intentional: the
+bound-method-alias and literal-`getattr` cases are no longer known limitations; the
+`compile()` fixture now executes the code object (compiling alone is not a sink) and a
+compile-only safe case was added. The multi-file project fixture reports exactly its 8
+labelled flows and nothing else.
 
 ---
 
 ## 6. Known limitations
 
-Language features modelled approximately (also listed per function in
-`SecurityFindings.unmodelled`):
+Modelled since the previous version: constant propagation with infeasible-branch
+pruning (`if`, conditional expressions, `match` on constants), dict/list/ConfigParser
+contents by constant key, object aliases (`b = a`), `return`/`raise` through
+`finally`, function aliases / literal `getattr` / `functools.partial`, cross-file
+analysis (`--project`).
 
-* `return` inside `try … finally` bypasses the `finally` block in the CFG.
-* Exceptions raised inside `except` handlers are not routed to outer handlers.
-* Short-circuit `and`/`or` is not split into blocks; `match` patterns do not
-  refine values; lambda bodies are not analysed; class bodies (class
-  attributes) are not lowered.
-* Comprehension variables share the enclosing function's namespace.
+Still approximated (listed per function in `SecurityFindings.unmodelled` where applicable):
 
-False-negative risks:
+* Exceptions raised inside `except` handlers are not routed to outer handlers;
+  `break`/`continue` inside `try … finally` skip the `finally` block.
+* Short-circuit `and`/`or` is not split into blocks (constant operands are folded);
+  `match` patterns refine nothing beyond constant subjects; lambda and class bodies are
+  not analysed; comprehension variables share the function namespace.
+* An alias bound to different callables on different paths is left unresolved.
 
-* Calls through computed callees (`getattr(obj, name)(…)`, bound-method
-  aliases, callbacks, `functools.partial`), decorators that wrap functions,
-  dynamic imports, cross-module flows (each file is analysed alone).
-* Aliasing of mutable objects (`b = a; b.append(t)` does not taint `a`).
-* Sources/sinks not in the registry (FastAPI typed parameters, async DB
-  drivers, ORMs other than raw SQL, `subprocess` wrappers in third-party code).
-* Path-traversal and XSS flows whose only origin is a parameter of a function
-  with no analysed caller are not reported (by design, to avoid flagging
-  ordinary file APIs).
-* `getattr`, `setattr` and `**kwargs` forwarding are approximated.
+False-negative risks (measured where noted):
 
-False-positive risks:
+* **Library code without sources** (measured: dominant on GHSA): parameter-origin flows
+  are reported only as `potential/low`, and for path traversal and XSS not at all.
+* Callbacks/higher-order functions, `getattr` with computed names, decorators that
+  change behaviour, dynamic imports, imports from outside the analysed project root.
+* Sinks not in the registry (measured on GHSA: Prisma `query_raw`, HTML built as
+  strings in renderers, `torch.load`, zmq `recv_pyobj`, `send_from_directory`'s
+  directory argument).
+* Mutation of containers by unresolved calls is ignored by default
+  (`Registry(unknown_calls_mutate_args=True)` opts in, at a false-positive cost).
 
-* Field (`self.x`) taint is flow-insensitive per class.
-* Unknown calls propagate taint from all inputs (e.g. a library function that
-  validates its argument is not recognised).
-* `startswith(BASE)` without a trailing separator is accepted on a
-  canonicalised path (`/srv/app-evil` passes `startswith("/srv/app")`); use
-  `commonpath`/`is_relative_to`.
-* Route-handler return XSS assumes `text/html`.
-* Heuristic AST rules (secret names, IP literals, `random` in "security"
-  functions) are reported as `potential`.
+False-positive risks (measured where noted):
+
+* **Validation in helper functions that raise** is not recognised (measured: piccolo,
+  dulwich patched revisions), nor `assert`-based validation (Paddle) — deliberately,
+  since asserts are stripped under `-O`.
+* Value equivalence is not tracked (blender-mcp checks `abspath(x)` but opens `x`).
+* Field (`self.x`) taint is flow-insensitive per class; unknown calls propagate taint
+  from all inputs; `'../' in p` checks only lower confidence; route-handler return XSS
+  assumes `text/html`; SEC011 session relevance is inferred from container names.
 
 ---
 
@@ -348,25 +379,25 @@ False-positive risks:
 ```bash
 # environment (Python 3.11/3.12)
 py -3.12 -m venv .venv
-.venv/Scripts/python.exe -m pip install -r requirements.txt   # no new dependencies were added
+.venv/Scripts/python.exe -m pip install -r requirements.txt   # no new dependencies
 
 # security analysis only (no comment generation, no ML)
-.venv/Scripts/python.exe -m src.security tests/security_fixtures/sqli_vulnerable.py
-.venv/Scripts/python.exe -m src.security src --json > outputs/security_src.json
+.venv/Scripts/python.exe -m src.security path/to/file.py
+.venv/Scripts/python.exe -m src.security path/to/project --project      # cross-file
 .venv/Scripts/python.exe -m src.main path/to/file.py --security --security-json outputs/sec.json
 
-# full pipeline with findings printed
-.venv/Scripts/python.exe -m src.main path/to/file.py --security-report --output outputs/annotated.py
-
-# evaluation
-.venv/Scripts/python.exe -m src.security.evaluate
-.venv/Scripts/python.exe -m src.security.evaluate --confirmed-only
-.venv/Scripts/python.exe -m src.security.evaluate --granularity function
-.venv/Scripts/python.exe -m src.security.evaluate --baseline path/to/original_security_analyzer.py --json outputs/security_eval.json
-
-# tests
+# tests and synthetic regression evaluation
 .venv/Scripts/python.exe -m pytest tests -q
-```
+.venv/Scripts/python.exe -m src.security.evaluate [--confirmed-only]
 
-`--baseline` needs a copy of the pre-change `src/security_analyzer.py`
-(`git show e3cd4fc:src/security_analyzer.py > /tmp/old_security_analyzer.py`).
+# independent benchmarks (needs git + gh; data goes to the git-ignored .benchmarks/)
+.venv/Scripts/python.exe benchmarks/fetch.py
+.venv/Scripts/python.exe -m src.security.benchmarks owasp --split all [--project]
+.venv/Scripts/python.exe -m src.security.benchmarks realworld --split all
+
+# the same runner against the original analyzer (any checkout of commit 53a0611)
+git worktree add --detach ../ccg-baseline 53a0611
+cp src/security/benchmarks.py ../ccg-baseline/src/security/
+cd ../ccg-baseline && SEC_BENCH_DATA=<repo>/.benchmarks SEC_BENCH_MANIFEST=<repo>/benchmarks/realworld/manifest.json \
+    python -m src.security.benchmarks realworld --split all --out <repo>/outputs/benchmarks/baseline
+```

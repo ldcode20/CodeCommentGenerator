@@ -156,4 +156,4 @@ def report_endpoint():
 def bound_method_alias():
     q = request.args["q"]
     run = get_db().cursor().execute
-    run("SELECT * FROM t WHERE q = '" + q + "'")  # expect: SEC005 (known limitation)
+    run("SELECT * FROM t WHERE q = '" + q + "'")  # expect: SEC005
