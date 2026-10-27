@@ -44,10 +44,43 @@ def main(argv=None) -> int:
     ap.add_argument("--no-trace", action="store_true", help="omit evidence traces")
     ap.add_argument("--min-confidence", choices=list(LEVELS), default="low")
     ap.add_argument("--fail-on", choices=["potential", "confirmed"], default=None)
+    ap.add_argument("--project", action="store_true",
+                    help="analyse each directory as one project (cross-file taint); "
+                         "default analyses every file on its own")
+    ap.add_argument("--include", action="append", default=None,
+                    help="with --project: only these sub-directories (repeatable)")
     args = ap.parse_args(argv)
 
     reports = []
     exit_code = 0
+    if args.project:
+        from .project import analyze_project
+        for root in args.paths:
+            prep = analyze_project(root, include=args.include)
+            if args.json:
+                for rep in prep.files.values():
+                    rep.findings = [f for f in rep.findings
+                                    if (args.all or f.status != "suppressed")
+                                    and LEVELS[f.confidence] >= LEVELS[args.min_confidence]]
+                print(json.dumps(prep.to_dict(), indent=2))
+            else:
+                for rep in prep.files.values():
+                    for f in rep.findings:
+                        if (args.all or f.status != "suppressed") and \
+                                LEVELS[f.confidence] >= LEVELS[args.min_confidence]:
+                            print(f.format_text(show_trace=not args.no_trace))
+                            print()
+                print(f"{root}: {len(prep.modules)} modules, {len(prep.active())} active finding(s); "
+                      f"cycles: {prep.cycles or 'none'}; unresolved internal imports: "
+                      f"{prep.unresolved_imports or 'none'}; parse errors: {len(prep.parse_errors)}; "
+                      f"{prep.runtime_ms:.0f} ms{'' if prep.converged else ' (did not fully converge)'}")
+            if prep.parse_errors:
+                exit_code = 2
+            if args.fail_on:
+                wanted = {"potential": {"potential", "confirmed"}, "confirmed": {"confirmed"}}[args.fail_on]
+                if any(f.status in wanted for f in prep.active()):
+                    exit_code = max(exit_code, 1)
+        return exit_code
     for path in _iter_files(args.paths):
         try:
             rep = analyze_file(path)

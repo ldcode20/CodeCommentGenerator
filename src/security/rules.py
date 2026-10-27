@@ -90,7 +90,7 @@ RULES: Dict[str, RuleMeta] = {r.rule_id: r for r in [
     RuleMeta("SEC011", "Insecure randomness in a security context", "weak-randomness",
              "CWE-338", "medium",
              "Use the secrets module (secrets.token_hex, secrets.choice) for tokens, keys and "
-             "passwords.", kind="ast"),
+             "passwords.", kind="ast", context="weakrand"),
     RuleMeta("SEC012", "Hardcoded network address", "configuration", "CWE-1051", "low",
              "Read hosts and addresses from configuration or the environment.", kind="ast"),
     RuleMeta("SEC013", "Path traversal", "path-traversal", "CWE-22", "high",
@@ -124,11 +124,16 @@ class SourceSpec:
     trust:
       remote  — attacker-controlled (HTTP request, interactive user, network)
       local   — operator/environment controlled (env vars, argv, files)
+      n/a     — not attacker data; a weak value (contexts restricts what it endangers)
+    contexts: security contexts the origin is dangerous for (None = all untrusted-data contexts)
+    exclude:  dotted names that match the prefix but are not sources
     """
     match: str
     description: str
     trust: str = "remote"
     heuristic: bool = False
+    contexts: Optional[FrozenSet[str]] = None
+    exclude: Tuple[str, ...] = ()
 
 
 SOURCES: List[SourceSpec] = [
@@ -147,6 +152,12 @@ SOURCES: List[SourceSpec] = [
     SourceSpec("call:os.getenv", "environment variable", trust="local"),
     SourceSpec("call:os.getenvb", "environment variable", trust="local"),
     SourceSpec("call:open", "file contents", trust="local"),
+    SourceSpec("prefix:random.", "pseudo-random value from the random module", trust="n/a",
+               contexts=frozenset({"weakrand"}),
+               exclude=("random.SystemRandom", "random.seed", "random.Random", "random.getstate",
+                        "random.setstate")),
+    SourceSpec("prefix:numpy.random.", "pseudo-random value from numpy.random", trust="n/a",
+               contexts=frozenset({"weakrand"})),
     SourceSpec("call:io.open", "file contents", trust="local"),
     SourceSpec("call:codecs.open", "file contents", trust="local"),
 ]
@@ -186,11 +197,14 @@ class SinkSpec:
     condition: Optional[str] = None
     api_fallback: bool = False
     operation: str = ""
+    severity: Optional[str] = None
+    unless_receiver: Tuple[str, ...] = ()     # receiver types for which this is not a sink
 
 
 SINKS: List[SinkSpec] = [
-    SinkSpec("SEC001", callees=("eval", "exec", "compile", "builtins.eval", "builtins.exec",
-                                "builtins.compile"),
+    # compile() only builds a code object; the taint flows into it and exec()/eval() of the
+    # code object is the sink (compiling user code for validation is not execution).
+    SinkSpec("SEC001", callees=("eval", "exec", "builtins.eval", "builtins.exec"),
              kwargs=("source",), api_fallback=True, operation="dynamic code execution"),
     SinkSpec("SEC002", callees=("os.system", "os.popen", "subprocess.getoutput",
                                 "subprocess.getstatusoutput", "commands.getoutput",
@@ -226,6 +240,15 @@ SINKS: List[SinkSpec] = [
                                 "os.truncate", "shutil.rmtree", "flask.send_file",
                                 "os.startfile"),
              kwargs=("file", "path", "filename_or_fp"), operation="file-system access"),
+    SinkSpec("SEC013", callees=("os.path.exists", "os.path.lexists", "os.path.isfile", "os.path.isdir",
+                                "os.path.islink", "os.path.getsize", "os.path.getmtime", "os.stat",
+                                "os.lstat", "os.access"),
+             kwargs=("path",), operation="file existence/metadata probe", severity="medium"),
+    SinkSpec("SEC013", methods=("exists", "is_file", "is_dir", "stat", "lstat"),
+             receiver="path", args=(), use_receiver=True, operation="file existence/metadata probe",
+             severity="medium"),
+    SinkSpec("SEC011", methods=("set_cookie",), receiver=None, method_only_ok=True, args=(1,),
+             kwargs=("value",), operation="cookie value"),
     SinkSpec("SEC013", callees=("os.rename", "os.replace", "shutil.copy", "shutil.copy2",
                                 "shutil.copyfile", "shutil.copytree", "shutil.move"),
              args=(0, 1), kwargs=("src", "dst"), operation="file-system access"),
@@ -245,7 +268,8 @@ SINKS: List[SinkSpec] = [
     SinkSpec("SEC015", callees=("flask.render_template_string", "jinja2.Template"),
              kwargs=("source",), operation="template compilation"),
     SinkSpec("SEC015", methods=("from_string",), receiver=None, method_only_ok=True,
-             kwargs=("source",), operation="template compilation"),
+             kwargs=("source",), unless_receiver=("jinja_sandbox",),
+             operation="template compilation"),
 ]
 
 SAFE_YAML_LOADERS = {"yaml.SafeLoader", "yaml.CSafeLoader", "yaml.BaseLoader",
@@ -277,6 +301,9 @@ SANITIZERS: List[SanitizerSpec] = [
                   note="framework response that is JSON, auto-escaped or a redirect"),
     SanitizerSpec(callees=("shlex.quote", "pipes.quote"), clears=frozenset({"shell"}),
                   note="shell quoting"),
+    SanitizerSpec(callees=("psycopg2.sql.Identifier", "psycopg2.sql.Literal", "psycopg2.sql.Placeholder",
+                           "psycopg.sql.Identifier", "psycopg.sql.Literal", "psycopg.sql.Placeholder"),
+                  clears=frozenset({"sql"}), note="psycopg SQL identifier/literal quoting"),
     SanitizerSpec(callees=("os.path.basename", "posixpath.basename", "ntpath.basename",
                            "werkzeug.utils.secure_filename", "werkzeug.secure_filename"),
                   clears=frozenset({"path"}), note="reduces the value to a bare file name"),
@@ -307,8 +334,11 @@ PROPAGATOR_CALLEES = {
     "base64.urlsafe_b64decode", "binascii.unhexlify", "urllib.parse.unquote",
     "urllib.parse.unquote_plus", "urllib.parse.urlparse", "urllib.parse.urljoin",
     "pathlib.Path", "pathlib.PurePath", "pathlib.PosixPath", "pathlib.WindowsPath",
-    "shlex.split", "textwrap.dedent", "copy.copy", "copy.deepcopy",
+    "shlex.split", "textwrap.dedent", "copy.copy", "copy.deepcopy", "compile", "builtins.compile",
 }
+# Methods whose result carries only the receiver's taint (arguments are bound as data).
+RECEIVER_ONLY_METHODS = {"bindparams"}
+SANDBOX_CREATORS = {"jinja2.sandbox.SandboxedEnvironment", "jinja2.sandbox.ImmutableSandboxedEnvironment"}
 PROPAGATOR_METHODS = {
     "format", "format_map", "join", "replace", "strip", "lstrip", "rstrip", "lower", "upper",
     "title", "capitalize", "casefold", "swapcase", "split", "rsplit", "splitlines", "partition",
@@ -320,7 +350,9 @@ PROPAGATOR_METHODS = {
     "fetchall", "fetchmany",
 }
 MUTATOR_METHODS = {"append", "extend", "insert", "add", "update", "appendleft", "extendleft",
-                   "put", "put_nowait"}
+                   "put", "put_nowait", "set", "__setitem__"}
+# Subscript stores into objects with these names are security-sensitive state (SEC011).
+SESSION_STORE_PATTERN = r"(?i)(session|cookie|token|csrf)"
 
 DB_CREATORS = {"sqlite3.connect", "psycopg2.connect", "psycopg.connect", "pymysql.connect",
                "mysql.connector.connect", "MySQLdb.connect", "sqlalchemy.create_engine",
@@ -339,6 +371,10 @@ class Registry:
     sanitizers: List[SanitizerSpec] = field(default_factory=lambda: list(SANITIZERS))
     canonicalizers: set = field(default_factory=lambda: set(CANONICALIZERS))
     route_decorator_pattern: str = ROUTE_DECORATOR_PATTERN
+    # Conservative option: assume an unresolved call may store any argument into a local
+    # container passed to it (fill(m, x) taints m). Raises recall, adds false positives
+    # (print(lst, x) would taint lst), so it is off by default.
+    unknown_calls_mutate_args: bool = False
 
     def sanitizer_for(self, callee: str, method: Optional[str], is_method_call: bool):
         for s in self.sanitizers:

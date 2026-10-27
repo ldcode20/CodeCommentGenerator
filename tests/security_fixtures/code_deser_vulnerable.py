@@ -17,7 +17,7 @@ def run_snippet():
 
 def compile_user_code():
     src = request.form["src"]
-    return compile(src, "<user>", "exec")  # expect: SEC001
+    exec(compile(src, "<user>", "exec"))  # expect: SEC001
 
 
 def evaluate(expression):

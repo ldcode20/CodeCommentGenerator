@@ -1,0 +1,1763 @@
+{
+ "dataset": "GHSA real-world fix pairs",
+ "version": "2026-10-26",
+ "selection": "reviewed pip advisories for CWE-89/78/22/79/94/95/502/1336 with exactly one GitHub fix commit touching <=3 non-test .py files and <=80 changed lines; first in-scope cases in GHSA-ID order per category",
+ "cases": [
+  {
+   "id": "GHSA-339r-cjv9-x78g",
+   "cve": "CVE-2024-11958",
+   "advisory_cwes": [
+    "CWE-89"
+   ],
+   "package": "llama-index-retrievers-duckdb-retriever",
+   "summary": " LlamaIndex Retrievers Integration: DuckDBRetriever SQL Injection",
+   "repo": "run-llama/llama_index",
+   "license": "MIT",
+   "vulnerable_commit": "b71d4f76837728adf8d6e390192a3e0ce2497c21",
+   "fix_commit": "35bd221e948e40458052d30c6ef2779bc965b6d0",
+   "category": "sqli",
+   "rule": "SEC005",
+   "scope": "modelled",
+   "split": "heldout",
+   "sites": [
+    {
+     "file": "llama-index-integrations/retrievers/llama-index-retrievers-duckdb-retriever/llama_index/retrievers/duckdb_retriever/base.py",
+     "vulnerable_functions": [
+      "DuckDBRetriever._retrieve"
+     ],
+     "patched_functions": [
+      "DuckDBRetriever._retrieve"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "query text interpolated into an f-string SQL statement passed to conn.execute(sql)",
+   "why_patched_safe": "query passed as a bound parameter: conn.execute(sql, [query])",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-6497-prx7-gpmq",
+   "cve": "CVE-2025-69662",
+   "advisory_cwes": [
+    "CWE-89",
+    "CWE-202"
+   ],
+   "package": "geopandas",
+   "summary": "geopandas SQL Injection Vulnerability in to_postgis() Allows Information Disclosure",
+   "repo": "geopandas/geopandas",
+   "license": "BSD-3-Clause",
+   "vulnerable_commit": "c301579e0ac4034c19bece63c08bf628613700b4",
+   "fix_commit": "6aa8ef14ffdee4ba1044349ab948e1a1fbfaf419",
+   "category": "sqli",
+   "rule": "SEC005",
+   "scope": "modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "geopandas/io/sql.py",
+     "vulnerable_functions": [
+      "_write_postgis"
+     ],
+     "patched_functions": [
+      "_write_postgis"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "schema/table/geometry names interpolated into sqlalchemy text(f\"SELECT Find_SRID(...)\")",
+   "why_patched_safe": "text(...).bindparams(...) with named parameters",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-f2mf-q878-gh58",
+   "cve": "CVE-2026-21892",
+   "advisory_cwes": [
+    "CWE-89"
+   ],
+   "package": "parsl",
+   "summary": "Parsl Monitoring Visualization Vulnerable to SQL Injection",
+   "repo": "Parsl/parsl",
+   "license": "Apache-2.0",
+   "vulnerable_commit": "2c37ae3e75137095302dac5f9cd3ca956cb51a47",
+   "fix_commit": "013a928461e70f38a33258bd525a351ed828e974",
+   "category": "sqli",
+   "rule": "SEC005",
+   "scope": "modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "parsl/monitoring/visualization/views.py",
+     "vulnerable_functions": [
+      "workflow_dag_details",
+      "workflow_resources"
+     ],
+     "patched_functions": [
+      "workflow_dag_details",
+      "workflow_resources"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "Flask route parameter workflow_id %-formatted into SQL passed to pandas.read_sql_query",
+   "why_patched_safe": "constant SQL with :run_id placeholder and params={...}",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-pwh4-6r3m-j2rf",
+   "cve": "CVE-2025-55156",
+   "advisory_cwes": [
+    "CWE-89"
+   ],
+   "package": "pyload-ng",
+   "summary": "PyLoad vulnerable to SQL Injection via API /json/add_package in add_links parameter",
+   "repo": "pyload/pyload",
+   "license": "AGPL-3.0 (GitHub: NOASSERTION)",
+   "vulnerable_commit": "a123accec0618798db77f9f5bc66838b741d9f58",
+   "fix_commit": "134edcdf6e2a10c393743c254da3d9d90b74258f",
+   "category": "sqli",
+   "rule": "SEC005",
+   "scope": "modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "src/pyload/core/database/file_database.py",
+     "vulnerable_functions": [
+      "FileDatabaseMethods.update_link_info"
+     ],
+     "patched_functions": [
+      "FileDatabaseMethods.update_link_info"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "URLs from the API joined into an IN ('...') clause in an f-string passed to self.c.execute",
+   "why_patched_safe": "placeholders '?' built from len(urls); values passed as parameters",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-rh5m-2482-966c",
+   "cve": "CVE-2026-32714",
+   "advisory_cwes": [
+    "CWE-89"
+   ],
+   "package": "scitokens",
+   "summary": "SciTokens is vulnerable to SQL Injection in KeyCache",
+   "repo": "scitokens/scitokens",
+   "license": "Apache-2.0",
+   "vulnerable_commit": "66b075c35da18f8364276553513a53c596b4b8e3",
+   "fix_commit": "3dba108853f2f4a6c0f2325c03779bf083c41cf2",
+   "category": "sqli",
+   "rule": "SEC005",
+   "scope": "modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "src/scitokens/utils/keycache.py",
+     "vulnerable_functions": [
+      "KeyCache.addkeyinfo",
+      "KeyCache._addkeyinfo",
+      "KeyCache._delete_cache_entry",
+      "KeyCache._add_negative_cache_entry",
+      "KeyCache.getkeyinfo"
+     ],
+     "patched_functions": [
+      "KeyCache.addkeyinfo",
+      "KeyCache._addkeyinfo",
+      "KeyCache._delete_cache_entry",
+      "KeyCache._add_negative_cache_entry",
+      "KeyCache.getkeyinfo"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "issuer/key_id .format()-ed into DELETE/INSERT/SELECT statements passed to curs.execute",
+   "why_patched_safe": "statements use ? placeholders with parameter lists",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-vghm-8cjp-hjw6",
+   "cve": "CVE-2018-25088",
+   "advisory_cwes": [
+    "CWE-89"
+   ],
+   "package": "postgraas-server",
+   "summary": "postgraas-server vulnerable to SQL injection",
+   "repo": "blue-yonder/postgraas_server",
+   "license": "Apache-2.0",
+   "vulnerable_commit": "bd4f1b88e7008a3abd4dbe05c26e7b20bbb99649",
+   "fix_commit": "7cd8d016edc74a78af0d81c948bfafbcc93c937c",
+   "category": "sqli",
+   "rule": "SEC005",
+   "scope": "modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "postgraas_server/backends/postgres_cluster/postgres_cluster_driver.py",
+     "vulnerable_functions": [
+      "check_db_or_user_exists",
+      "create_postgres_db"
+     ],
+     "patched_functions": [
+      "check_db_or_user_exists",
+      "create_postgres_db"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "db_name/db_user .format()-ed into SQL passed to cur.execute",
+   "why_patched_safe": "%s parameters and psycopg2.sql.SQL/Identifier composition",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-x46r-mf5g-xpr6",
+   "cve": "CVE-2026-30930",
+   "advisory_cwes": [
+    "CWE-89"
+   ],
+   "package": "Glances",
+   "summary": "Glances has SQL Injection via Process Names in TimescaleDB Export",
+   "repo": "nicolargo/glances",
+   "license": "LGPL-3.0 (GitHub: NOASSERTION)",
+   "vulnerable_commit": "faa29ac9143c89c7b8b157ee9d7064d1ed128196",
+   "fix_commit": "39161f0d6fd723d83f534b48f24cdca722573336",
+   "category": "sqli",
+   "rule": "SEC005",
+   "scope": "modelled",
+   "split": "heldout",
+   "sites": [
+    {
+     "file": "glances/exports/glances_timescaledb/__init__.py",
+     "vulnerable_functions": [
+      "Export.export"
+     ],
+     "patched_functions": [
+      "Export.export"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "process names / plugin names quoted into f-string INSERT/CREATE statements passed to cur.execute",
+   "why_patched_safe": "psycopg sql.SQL composition with sql.Identifier and executemany placeholders",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-x783-xp3g-mqhp",
+   "cve": "CVE-2026-40315",
+   "advisory_cwes": [
+    "CWE-89"
+   ],
+   "package": "PraisonAI",
+   "summary": "PraisonAI: SQLiteConversationStore didn't validate table_prefix when constructing SQL queries",
+   "repo": "MervinPraison/PraisonAI",
+   "license": "MIT",
+   "vulnerable_commit": "757559f67f1c37388288605f8d893ff9e10fb6ed",
+   "fix_commit": "0accebb2e3c3ec2fca66bbea0444fb7a35f0b4ef",
+   "category": "sqli",
+   "rule": "SEC005",
+   "scope": "modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "src/praisonai/praisonai/persistence/conversation/sqlite.py",
+     "vulnerable_functions": [
+      "SQLiteConversationStore._create_tables",
+      "SQLiteConversationStore.create_session",
+      "SQLiteConversationStore.get_session",
+      "SQLiteConversationStore.update_session",
+      "SQLiteConversationStore.delete_session",
+      "SQLiteConversationStore.list_sessions",
+      "SQLiteConversationStore.add_message"
+     ],
+     "patched_functions": [
+      "SQLiteConversationStore._create_tables",
+      "SQLiteConversationStore.create_session",
+      "SQLiteConversationStore.get_session",
+      "SQLiteConversationStore.update_session",
+      "SQLiteConversationStore.delete_session",
+      "SQLiteConversationStore.list_sessions",
+      "SQLiteConversationStore.add_message"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "constructor table_prefix stored in table-name fields interpolated into f-string SQL",
+   "why_patched_safe": "__init__ rejects table_prefix unless re.match(r'^[a-zA-Z0-9_]*$', ...) before storing it",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-xq59-7jf3-rjc6",
+   "cve": "CVE-2023-47128",
+   "advisory_cwes": [
+    "CWE-89"
+   ],
+   "package": "piccolo",
+   "summary": "piccolo SQL Injection via named transaction savepoints",
+   "repo": "piccolo-orm/piccolo",
+   "license": "MIT",
+   "vulnerable_commit": "e4946d858e1aae1a9a4cf7714957d07983d94cde",
+   "fix_commit": "82679eb8cd1449cf31d87c9914a072e70168b6eb",
+   "category": "sqli",
+   "rule": "SEC005",
+   "scope": "modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "piccolo/engine/postgres.py",
+     "vulnerable_functions": [
+      "Savepoint.rollback_to",
+      "Savepoint.release",
+      "PostgresTransaction.savepoint"
+     ],
+     "patched_functions": [
+      "Savepoint.rollback_to",
+      "Savepoint.release",
+      "PostgresTransaction.savepoint"
+     ]
+    },
+    {
+     "file": "piccolo/engine/sqlite.py",
+     "vulnerable_functions": [
+      "Savepoint.rollback_to",
+      "Savepoint.release",
+      "SQLiteTransaction.savepoint"
+     ],
+     "patched_functions": [
+      "Savepoint.rollback_to",
+      "Savepoint.release",
+      "SQLiteTransaction.savepoint"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "savepoint name interpolated into f\"SAVEPOINT {name}\" passed to connection.execute",
+   "why_patched_safe": "validate_savepoint_name() (imported helper that raises) is called before each statement",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-h6m6-jj8v-94jj",
+   "cve": "CVE-2024-5225",
+   "advisory_cwes": [
+    "CWE-89"
+   ],
+   "package": "litellm",
+   "summary": "SQL injection in litellm",
+   "repo": "BerriAI/litellm",
+   "license": "NOASSERTION",
+   "vulnerable_commit": "1ec2ba186f9ad56049397ed3cef3dd2ce119c8d1",
+   "fix_commit": "f75c15d6cd535aa78014378ad532de1df6be2f56",
+   "category": "sqli",
+   "rule": "SEC005",
+   "scope": "api_not_modelled",
+   "split": "heldout",
+   "sites": [
+    {
+     "file": "litellm/proxy/proxy_server.py",
+     "vulnerable_functions": [
+      "global_spend_logs"
+     ],
+     "patched_functions": [
+      "global_spend_logs"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "api_key concatenated into SQL passed to prisma_client.db.query_raw (Prisma API, not modelled)",
+   "why_patched_safe": "query_raw with $1 placeholder",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-hp84-p2gq-6fvr",
+   "cve": "CVE-2026-7815",
+   "advisory_cwes": [
+    "CWE-89"
+   ],
+   "package": "pgadmin4",
+   "summary": "SQL injection vulnerability in pgAdmin 4 Maintenance Tool",
+   "repo": "pgadmin-org/pgadmin4",
+   "license": "PostgreSQL (GitHub: NOASSERTION)",
+   "vulnerable_commit": "d112dc3b962218efc3613fa727d54f0fc5b1d527",
+   "fix_commit": "cf53953d9ad66c182a08e662c1ba29c5831b486b",
+   "category": "sqli",
+   "rule": "SEC005",
+   "scope": "api_not_modelled",
+   "split": "heldout",
+   "sites": [
+    {
+     "file": "web/pgadmin/tools/maintenance/__init__.py",
+     "vulnerable_functions": [
+      "create_maintenance_job"
+     ],
+     "patched_functions": [
+      "create_maintenance_job"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "user option values rendered into a SQL template (render_template) that is executed later (not modelled)",
+   "why_patched_safe": "values allow-listed by validate_maintenance_data before rendering",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-7pc3-pr3q-58vg",
+   "cve": "CVE-2024-34073",
+   "advisory_cwes": [
+    "CWE-78"
+   ],
+   "package": "sagemaker",
+   "summary": "sagemaker-python-sdk Command Injection vulnerability",
+   "repo": "aws/sagemaker-python-sdk",
+   "license": "Apache-2.0",
+   "vulnerable_commit": "d27836eab1575d90db676ab2667b4816eaf45af0",
+   "fix_commit": "2d873d53f708ea570fc2e2a6974f8c3097fe9df5",
+   "category": "cmdi",
+   "rule": "SEC002",
+   "scope": "modelled",
+   "split": "heldout",
+   "sites": [
+    {
+     "file": "src/sagemaker/serve/save_retrive/version_1_0_0/save/utils.py",
+     "vulnerable_functions": [
+      "capture_dependencies"
+     ],
+     "patched_functions": [
+      "capture_dependencies"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "requirements path interpolated into an f-string passed to os.system",
+   "why_patched_safe": "argument list passed to subprocess.run without a shell",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-9277-mp7x-85jf",
+   "cve": "CVE-2026-42563",
+   "advisory_cwes": [
+    "CWE-78"
+   ],
+   "package": "dulwich",
+   "summary": "Dulwich Vulnerable to Command Injection via Merge Driver Path",
+   "repo": "jelmer/dulwich",
+   "license": "Apache-2.0 OR GPL-2.0+ (GitHub: NOASSERTION)",
+   "vulnerable_commit": "957f0dec2f095d5c87ba12eec383f75ffd021350",
+   "fix_commit": "e3331b3b3a122fc313460182f928f59723580b7b",
+   "category": "cmdi",
+   "rule": "SEC002",
+   "scope": "modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "dulwich/merge_drivers.py",
+     "vulnerable_functions": [
+      "ProcessMergeDriver.merge"
+     ],
+     "patched_functions": [
+      "ProcessMergeDriver.merge"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "file path (%P) substituted into a command run with subprocess.run(cmd, shell=True)",
+   "why_patched_safe": "every substituted value passes through _shell_quote (shlex.quote / cmd.exe quoting)",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-g99h-56mw-8263",
+   "cve": "CVE-2025-1753",
+   "advisory_cwes": [
+    "CWE-78"
+   ],
+   "package": "llama-index-cli",
+   "summary": "LLama-Index CLI OS command injection vulnerability",
+   "repo": "run-llama/llama_index",
+   "license": "MIT",
+   "vulnerable_commit": "2c00a1dfc71ec513353aa10159d980b68c3c7e70",
+   "fix_commit": "b57e76738c53ca82d88658b82f2d82d1c7839c7d",
+   "category": "cmdi",
+   "rule": "SEC002",
+   "scope": "modelled",
+   "split": "heldout",
+   "sites": [
+    {
+     "file": "llama-index-cli/llama_index/cli/rag/base.py",
+     "vulnerable_functions": [
+      "RagCLI.handle_cli"
+     ],
+     "patched_functions": [
+      "RagCLI.handle_cli"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "--files path joined into a command string executed with os.system",
+   "why_patched_safe": "path quoted with shlex.quote",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-j5h9-9r39-43q5",
+   "cve": "CVE-2023-52310",
+   "advisory_cwes": [
+    "CWE-78"
+   ],
+   "package": "PaddlePaddle",
+   "summary": "PaddlePaddle command injection in get_online_pass_interval",
+   "repo": "PaddlePaddle/Paddle",
+   "license": "Apache-2.0",
+   "vulnerable_commit": "5252c5d358807edcb5b61b06e4853b894478c0bf",
+   "fix_commit": "49bec176053595975c1941cff9749c55f7203ea9",
+   "category": "cmdi",
+   "rule": "SEC002",
+   "scope": "modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "python/paddle/incubate/distributed/fleet/fleet_util.py",
+     "vulnerable_functions": [
+      "FleetUtil.get_online_pass_interval"
+     ],
+     "patched_functions": [
+      "FleetUtil.get_online_pass_interval"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "days/hours parameters concatenated into os.popen(\"echo -n \" + days)",
+   "why_patched_safe": "assert statements reject shell metacharacters before os.popen",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-rf7p-79xq-8xwm",
+   "cve": "CVE-2023-52311",
+   "advisory_cwes": [
+    "CWE-78"
+   ],
+   "package": "PaddlePaddle",
+   "summary": "PaddlePaddle command injection in _wget_download",
+   "repo": "PaddlePaddle/Paddle",
+   "license": "Apache-2.0",
+   "vulnerable_commit": "e64a054ff6b3964070fb2eb24c9aace2db5965eb",
+   "fix_commit": "c5f6862d118d7d69210f0e73bea1b055f5f21f2b",
+   "category": "cmdi",
+   "rule": "SEC002",
+   "scope": "modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "python/paddle/utils/download.py",
+     "vulnerable_functions": [
+      "_wget_download"
+     ],
+     "patched_functions": [
+      "_wget_download"
+     ]
+    }
+   ],
+   "patched_applicable": false,
+   "why_vulnerable": "url and file name interpolated into a wget command run with Popen(shell=True)",
+   "why_patched_safe": "NOT fixed by this commit: it only adds an http/https scheme assert; url and fullname stay unquoted in the shell command (re-reported as GHSA-qqv2-35q8-p2g2). Label corrected, see LABEL_CORRECTIONS",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-rm79-x4g6-hvg5",
+   "cve": "CVE-2025-12763",
+   "advisory_cwes": [
+    "CWE-78"
+   ],
+   "package": "pgadmin4",
+   "summary": "pgAdmin 4 has command injection vulnerability on Windows systems",
+   "repo": "pgadmin-org/pgadmin4",
+   "license": "PostgreSQL (GitHub: NOASSERTION)",
+   "vulnerable_commit": "1d397395f75320ca1d4ed5e9ca721c603415e836",
+   "fix_commit": "e374edc69239b3e02ecde895e27d9f9e488b87ee",
+   "category": "cmdi",
+   "rule": "SEC002",
+   "scope": "modelled",
+   "split": "heldout",
+   "sites": [
+    {
+     "file": "web/pgadmin/misc/bgprocess/process_executor.py",
+     "vulnerable_functions": [
+      "execute"
+     ],
+     "patched_functions": [
+      "execute"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "Popen(cmd, **kwargs) with kwargs['shell'] = True on Windows",
+   "why_patched_safe": "kwargs['shell'] = False",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-3cr5-2446-8pg3",
+   "cve": "CVE-2023-52314",
+   "advisory_cwes": [
+    "CWE-78"
+   ],
+   "package": "PaddlePaddle",
+   "summary": "PaddlePaddle command injection in convert_shape_compare",
+   "repo": "PaddlePaddle/Paddle",
+   "license": "Apache-2.0",
+   "vulnerable_commit": "372062dfa0b2f1ba293b497a6c24c46f60b61214",
+   "fix_commit": "5ed9478fdef96a06eeec9093f9e768c97b094af3",
+   "category": "codeinj",
+   "rule": "SEC001",
+   "scope": "modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "python/paddle/jit/dy2static/convert_operators.py",
+     "vulnerable_functions": [
+      "convert_shape_compare"
+     ],
+     "patched_functions": []
+    }
+   ],
+   "patched_applicable": false,
+   "why_vulnerable": "comparison operator string from *args concatenated into eval()",
+   "why_patched_safe": "function removed by the fix (no patched counterpart)",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-29h4-r29x-hchv",
+   "cve": "CVE-2026-8838",
+   "advisory_cwes": [
+    "CWE-94"
+   ],
+   "package": "redshift-connector",
+   "summary": "amazon-redshift-python-driver vulnerable to Remote Code Execution via eval() Injection",
+   "repo": "aws/amazon-redshift-python-driver",
+   "license": "Apache-2.0",
+   "vulnerable_commit": "2c1dd5b9aca1945a1b8e01b2359075d9e8b0e77c",
+   "fix_commit": "69a69dfdead75918e20384da52bcd760ded8dbca",
+   "category": "codeinj",
+   "rule": "SEC001",
+   "scope": "modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "redshift_connector/utils/type_utils.py",
+     "vulnerable_functions": [
+      "vector_in"
+     ],
+     "patched_functions": [
+      "vector_in"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "server-supplied bytes decoded and passed to eval()",
+   "why_patched_safe": "parsed with int() over split()",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-77rh-m34w-rv36",
+   "cve": "CVE-2026-35002",
+   "advisory_cwes": [
+    "CWE-95"
+   ],
+   "package": "agno",
+   "summary": "Agno is vulnerable to Eval Injection",
+   "repo": "agno-agi/agno",
+   "license": "Apache-2.0",
+   "vulnerable_commit": "ea35f13518be03ef38a41a64665fdc270b9d12d3",
+   "fix_commit": "cbf675521d4d2281925a051784a3b94172e56416",
+   "category": "codeinj",
+   "rule": "SEC001",
+   "scope": "modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "libs/agno/agno/models/base.py",
+     "vulnerable_functions": [
+      "Model.run_function_calls",
+      "Model.arun_function_calls"
+     ],
+     "patched_functions": [
+      "Model.run_function_calls",
+      "Model.arun_function_calls"
+     ]
+    },
+    {
+     "file": "libs/agno/agno/tools/function.py",
+     "vulnerable_functions": [
+      "UserInputField.from_dict"
+     ],
+     "patched_functions": [
+      "UserInputField.from_dict"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "field_type string from tool/user data passed to eval()",
+   "why_patched_safe": "mapped through a fixed type dictionary",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-89g2-xw5c-v95p",
+   "cve": "CVE-2026-42079",
+   "advisory_cwes": [
+    "CWE-95"
+   ],
+   "package": "pptagent",
+   "summary": "PPTAgent: Arbitrary Code Execution via Python eval() of LLM-Generated Code with Builtins in Scope",
+   "repo": "icip-cas/PPTAgent",
+   "license": "MIT",
+   "vulnerable_commit": "858da237342f4fdf9e6c3e47baaef6f44647c8f0",
+   "fix_commit": "418491a9a1c02d9d93194b5973bb58df35cf9d00",
+   "category": "codeinj",
+   "rule": "SEC001",
+   "scope": "modelled",
+   "split": "heldout",
+   "sites": [
+    {
+     "file": "pptagent/apis.py",
+     "vulnerable_functions": [
+      "CodeExecutor.execute_actions"
+     ],
+     "patched_functions": [
+      "CodeExecutor.execute_actions"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "LLM-generated code line passed to eval(line, {}, ...) with default builtins",
+   "why_patched_safe": "eval with globals {'__builtins__': {}} (advisory considers this fixed)",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-8xwf-cr4r-856r",
+   "cve": "CVE-2026-28370",
+   "advisory_cwes": [
+    "CWE-95"
+   ],
+   "package": "vitrage",
+   "summary": "OpenStack Vitrage: Unauthorized Access to the Host can Lead to Eval Injection",
+   "repo": "openstack/vitrage",
+   "license": "Apache-2.0 (GitHub: none declared)",
+   "vulnerable_commit": "a0ca4f8a553e4f0200aac410feb982b0811714a1",
+   "fix_commit": "89df4bd2ffda1a5ddea66cd828438a6a171a3b11",
+   "category": "codeinj",
+   "rule": "SEC001",
+   "scope": "modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "vitrage/graph/query.py",
+     "vulnerable_functions": [
+      "create_predicate"
+     ],
+     "patched_functions": [
+      "create_predicate"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "query dictionary turned into an expression string passed to eval()",
+   "why_patched_safe": "predicate built from operator functions without eval",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-ghq9-vc6f-8qjf",
+   "cve": "CVE-2024-49048",
+   "advisory_cwes": [
+    "CWE-94",
+    "CWE-95"
+   ],
+   "package": "torchgeo",
+   "summary": "TorchGeo Remote Code Execution Vulnerability",
+   "repo": "torchgeo/torchgeo",
+   "license": "MIT",
+   "vulnerable_commit": "da691c4568b0ab98ea74bb736081622fb98d23c9",
+   "fix_commit": "1a980788cb7089a1115f3b786c7daa9dd47d7d7a",
+   "category": "codeinj",
+   "rule": "SEC001",
+   "scope": "modelled",
+   "split": "heldout",
+   "sites": [
+    {
+     "file": "torchgeo/models/api.py",
+     "vulnerable_functions": [
+      "get_weight"
+     ],
+     "patched_functions": [
+      "get_weight"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "weight name passed to eval(name)",
+   "why_patched_safe": "name looked up in the registered weights mapping",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-r3hx-x5rh-p9vv",
+   "cve": null,
+   "advisory_cwes": [
+    "CWE-95"
+   ],
+   "package": "django-haystack",
+   "summary": "django-haystack: Remote Code Execution via `eval()` in Elasticsearch Result Deserialization",
+   "repo": "django-haystack/django-haystack",
+   "license": "BSD-3-Clause (GitHub: NOASSERTION)",
+   "vulnerable_commit": "294bb04af1b6d1f0bff49c3e4ea624f22d99e918",
+   "fix_commit": "eb05f193c9771a68dcc8cfac6674a0d48a52ee9d",
+   "category": "codeinj",
+   "rule": "SEC001",
+   "scope": "modelled",
+   "split": "heldout",
+   "sites": [
+    {
+     "file": "haystack/backends/elasticsearch_backend.py",
+     "vulnerable_functions": [
+      "ElasticsearchSearchBackend._to_python"
+     ],
+     "patched_functions": [
+      "ElasticsearchSearchBackend._to_python"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "Elasticsearch result value passed to eval()",
+   "why_patched_safe": "ast.literal_eval",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-v798-mcc6-2m3m",
+   "cve": "CVE-2026-7873",
+   "advisory_cwes": [
+    "CWE-94"
+   ],
+   "package": "langflow",
+   "summary": "Langflow: Code Injection Vulnerability in Code Validation Endpoint",
+   "repo": "langflow-ai/langflow",
+   "license": "MIT",
+   "vulnerable_commit": "094694d3f20c1da499f4d8dbac15c510609e3026",
+   "fix_commit": "e7c33dbaade20b5295c7fa26bf83cc1ff68fba02",
+   "category": "codeinj",
+   "rule": "SEC001",
+   "scope": "modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "src/lfx/src/lfx/custom/validate.py",
+     "vulnerable_functions": [
+      "validate_code"
+     ],
+     "patched_functions": [
+      "validate_code"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "submitted code compiled and exec()-ed while 'validating'",
+   "why_patched_safe": "code is only compiled, not executed",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-x2rj-828p-hx9m",
+   "cve": "CVE-2026-61539",
+   "advisory_cwes": [
+    "CWE-95"
+   ],
+   "package": "xinference",
+   "summary": "Xinference vulnerable to remote code execution via unsafe `eval()` in Llama3 tool-call parsing",
+   "repo": "xorbitsai/inference",
+   "license": "Apache-2.0",
+   "vulnerable_commit": "4cefcaa1e63d7e29d26bcd4be96cb267da113871",
+   "fix_commit": "1b3d220f342ce68d34cec4586d9409d457dadc42",
+   "category": "codeinj",
+   "rule": "SEC001",
+   "scope": "modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "xinference/model/llm/tool_parsers/llama3_tool_parser.py",
+     "vulnerable_functions": [
+      "Llama3ToolParser.extract_tool_calls"
+     ],
+     "patched_functions": [
+      "Llama3ToolParser.extract_tool_calls"
+     ]
+    },
+    {
+     "file": "xinference/model/llm/utils.py",
+     "vulnerable_functions": [
+      "ChatModelMixin._eval_llama3_chat_arguments"
+     ],
+     "patched_functions": [
+      "ChatModelMixin._eval_llama3_chat_arguments"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "model output passed to eval(text, {}, {})",
+   "why_patched_safe": "json.loads / ast.literal_eval",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-2689-cw26-6cpj",
+   "cve": "CVE-2024-53305",
+   "advisory_cwes": [
+    "CWE-78"
+   ],
+   "package": "whoogle-search",
+   "summary": "Whoogle allows attackers to execute arbitrary code via supplying a crafted search query",
+   "repo": "benbusby/whoogle-search",
+   "license": "MIT",
+   "vulnerable_commit": "466cb63d0e5235364249cd6b83431ef8b5c82444",
+   "fix_commit": "223f00c3c0533423114f99b30c561278bc0b42ba",
+   "category": "deserialization",
+   "rule": "SEC009",
+   "scope": "modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "app/models/config.py",
+     "vulnerable_functions": [
+      "Config._decode_preferences"
+     ],
+     "patched_functions": [
+      "Config._decode_preferences"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "user-supplied preferences token decompressed and passed to pickle.loads (advisory CWE-78; mechanism is CWE-502)",
+   "why_patched_safe": "preferences decoded with json.loads",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-34wm-4hw7-qfjv",
+   "cve": "CVE-2025-11157",
+   "advisory_cwes": [
+    "CWE-502"
+   ],
+   "package": "feast",
+   "summary": "Feast vulnerable to Deserialization of Untrusted Data",
+   "repo": "feast-dev/feast",
+   "license": "Apache-2.0",
+   "vulnerable_commit": "5e4b9fd5ca490bcd52710fa8691ad5fa6f5680dc",
+   "fix_commit": "b2e37ff37953b68ae833f6874ab5bc510a4ca5fb",
+   "category": "deserialization",
+   "rule": "SEC010",
+   "scope": "modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "sdk/python/feast/infra/compute_engines/kubernetes/main.py",
+     "vulnerable_functions": [
+      "<module>"
+     ],
+     "patched_functions": [
+      "<module>"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "configuration file / base64 payload loaded with yaml.load(..., Loader=yaml.Loader)",
+   "why_patched_safe": "yaml.safe_load",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-hhrp-gw25-jr43",
+   "cve": "CVE-2026-57516",
+   "advisory_cwes": [
+    "CWE-94",
+    "CWE-502"
+   ],
+   "package": "ray",
+   "summary": "Ray: Arbitrary code execution via ray.data.read_webdataset default decoder: pickle.loads(value) and torch.load(weights_only=False)",
+   "repo": "ray-project/ray",
+   "license": "Apache-2.0",
+   "vulnerable_commit": "a6416a64596db70e3de2404342b7f51ebdb8b5a1",
+   "fix_commit": "41443a18f9e6403a072de69098a279c23e2d943c",
+   "category": "deserialization",
+   "rule": "SEC009",
+   "scope": "modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "python/ray/data/_internal/datasource/webdataset_datasource.py",
+     "vulnerable_functions": [
+      "_default_decoder"
+     ],
+     "patched_functions": [
+      "_default_decoder"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "dataset sample bytes for .pyd/.pickle keys passed to pickle.loads",
+   "why_patched_safe": "pickle.loads only when allow_unsafe=True (default False) is passed by the caller",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-2vh9-42vm-xmv2",
+   "cve": "CVE-2025-66455",
+   "advisory_cwes": [
+    "CWE-502"
+   ],
+   "package": "lmdeploy",
+   "summary": "LMDeploy has Remote Code Execution\u00a0by Pickle Deserialization via handle_zmq_recv in lmdeploy/lmdeploy/pytorch/disagg/conn/engine_conn.py",
+   "repo": "InternLM/lmdeploy",
+   "license": "Apache-2.0",
+   "vulnerable_commit": "eb94bd8cb4155eb055e2404d8304a7af089a6099",
+   "fix_commit": "f05b4ad8bf2e2d84101a1d63b3c44fadd99223b2",
+   "category": "deserialization",
+   "rule": "SEC009",
+   "scope": "api_not_modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "lmdeploy/pytorch/disagg/conn/engine_conn.py",
+     "vulnerable_functions": [
+      "EngineP2PConnection.handle_zmq_recv"
+     ],
+     "patched_functions": [
+      "EngineP2PConnection.handle_zmq_recv"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "zmq recv_pyobj() (pickle) on network input (API not modelled)",
+   "why_patched_safe": "recv_json + pydantic validation",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-69w3-r845-3855",
+   "cve": "CVE-2026-1839",
+   "advisory_cwes": [
+    "CWE-502"
+   ],
+   "package": "transformers",
+   "summary": "HuggingFace Transformers allows for arbitrary code execution in the `Trainer` class",
+   "repo": "huggingface/transformers",
+   "license": "Apache-2.0",
+   "vulnerable_commit": "2aa7b652811b3a2fe92bd586a2bbd4f9cde19a57",
+   "fix_commit": "03c8082ba4594c9b8d6fe190ca9bed0e5f8ca396",
+   "category": "deserialization",
+   "rule": "SEC009",
+   "scope": "api_not_modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "src/transformers/trainer.py",
+     "vulnerable_functions": [
+      "Trainer._load_rng_state"
+     ],
+     "patched_functions": [
+      "Trainer._load_rng_state"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "torch.load(rng_file) without weights_only (API not modelled)",
+   "why_patched_safe": "torch.load(..., weights_only=True)",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-442q-2j6p-642g",
+   "cve": "CVE-2026-55390",
+   "advisory_cwes": [
+    "CWE-22",
+    "CWE-200",
+    "CWE-610"
+   ],
+   "package": "datamodel-code-generator",
+   "summary": "datamodel-code-generator vulnerable to arbitrary local file read via XSD `schemaLocation` (`xs:include`/`xs:import`) path traversal, with no remote-ref gate",
+   "repo": "koxudaxi/datamodel-code-generator",
+   "license": "MIT",
+   "vulnerable_commit": "2ff4a72b4550a2b2069754c5b075b1655067e5fb",
+   "fix_commit": "d2d5cecd9fd3a2a6dbf148bf0740b83a11fc6820",
+   "category": "pathtraver",
+   "rule": "SEC013",
+   "scope": "modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "src/datamodel_code_generator/parser/xmlschema.py",
+     "vulnerable_functions": [
+      "_XMLSchemaConverter._collect_schema"
+     ],
+     "patched_functions": [
+      "_XMLSchemaConverter._collect_schema"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "schemaLocation from the input document resolved relative to the source directory and read",
+   "why_patched_safe": "_resolve_schema_location requires location.is_relative_to(base_path)",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-4h8q-hh2j-755w",
+   "cve": "CVE-2026-66004",
+   "advisory_cwes": [
+    "CWE-22"
+   ],
+   "package": "blender-mcp",
+   "summary": "BlenderMCP path traversal in download_polyhaven_asset allows arbitrary file writes",
+   "repo": "ahujasid/blender-mcp",
+   "license": "MIT",
+   "vulnerable_commit": "584e892695deb28d8f09b258db981006bbb1b229",
+   "fix_commit": "30a3308446cd8f81a9446e5a2ed657c0d8d86072",
+   "category": "pathtraver",
+   "rule": "SEC013",
+   "scope": "modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "addon.py",
+     "vulnerable_functions": [
+      "BlenderMCPServer.download_polyhaven_asset"
+     ],
+     "patched_functions": [
+      "BlenderMCPServer.download_polyhaven_asset"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "include path from remote asset metadata joined to temp_dir and written with open(..., 'wb')",
+   "why_patched_safe": "abspath + startswith(abs_temp_dir + os.sep) check, '..' and absolute paths skipped",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-5jmr-gcrj-2c9q",
+   "cve": "CVE-2026-59820",
+   "advisory_cwes": [
+    "CWE-22"
+   ],
+   "package": "litellm",
+   "summary": "LiteLLM: Arbitrary file write via path traversal in Skills archive extraction",
+   "repo": "BerriAI/litellm",
+   "license": "NOASSERTION",
+   "vulnerable_commit": "e828a91eeefbc2e6e5fe7a34ddd40a5201216b15",
+   "fix_commit": "6a15adcd64137d37f73dee76dfe7481f8c2d9196",
+   "category": "pathtraver",
+   "rule": "SEC013",
+   "scope": "modelled",
+   "split": "heldout",
+   "sites": [
+    {
+     "file": "litellm/llms/litellm_proxy/skills/sandbox_executor.py",
+     "vulnerable_functions": [
+      "SkillsSandboxExecutor.execute"
+     ],
+     "patched_functions": [
+      "SkillsSandboxExecutor.execute"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "archive member names used as paths for open(local_path, 'wb')",
+   "why_patched_safe": "member paths normalised and rejected if they start with '..' or are absolute",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-9xwg-3r6f-jcx2",
+   "cve": "CVE-2026-61632",
+   "advisory_cwes": [
+    "CWE-22"
+   ],
+   "package": "pymdown-extensions",
+   "summary": "PyMdown Extensions: Path traversal in the b64 extension lets <img src> read files outside base_path",
+   "repo": "facelessuser/pymdown-extensions",
+   "license": "MIT (GitHub: NOASSERTION)",
+   "vulnerable_commit": "9fb9643c84c46386d77eef1a18929330620e3111",
+   "fix_commit": "edce35586d11a1ef78bb187bc60497fe6dbf3b64",
+   "category": "pathtraver",
+   "rule": "SEC013",
+   "scope": "modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "pymdownx/b64.py",
+     "vulnerable_functions": [
+      "repl_path"
+     ],
+     "patched_functions": [
+      "repl_path"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "<img src> path from Markdown joined to base_path and opened",
+   "why_patched_safe": "abspath + startswith(root_path + os.sep) restriction",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-c5px-58j2-7fqp",
+   "cve": "CVE-2026-54785",
+   "advisory_cwes": [
+    "CWE-22",
+    "CWE-200"
+   ],
+   "package": "gemini-bridge",
+   "summary": "gemini-bridge vulnerable to arbitrary local file read via consult_gemini_with_files inline mode",
+   "repo": "eLyiN/gemini-bridge",
+   "license": "MIT",
+   "vulnerable_commit": "bb3ad9e44dba04092abc2e2a8af83223f10402db",
+   "fix_commit": "8f3b85afd02b692c4bc974b5176e12fb277ea801",
+   "category": "pathtraver",
+   "rule": "SEC013",
+   "scope": "modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "src/mcp_server.py",
+     "vulnerable_functions": [
+      "_prepare_inline_payload",
+      "_resolve_path"
+     ],
+     "patched_functions": [
+      "_prepare_inline_payload",
+      "_resolve_path"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "MCP tool file arguments resolved without containment and read",
+   "why_patched_safe": "resolved candidate must stay under the resolved directory root",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-cj54-hpcc-gj6h",
+   "cve": "CVE-2026-53502",
+   "advisory_cwes": [
+    "CWE-22"
+   ],
+   "package": "thumbor",
+   "summary": "Thumbor has path traversal via post-validation URL decoding bypass in file_loader",
+   "repo": "thumbor/thumbor",
+   "license": "MIT",
+   "vulnerable_commit": "471ef279700e9f79941d451acf88abe1601df875",
+   "fix_commit": "3b986d13677b30fe6651c8c72ebb25957ac0a40d",
+   "category": "pathtraver",
+   "rule": "SEC013",
+   "scope": "modelled",
+   "split": "heldout",
+   "sites": [
+    {
+     "file": "thumbor/loaders/file_loader.py",
+     "vulnerable_functions": [
+      "load"
+     ],
+     "patched_functions": [
+      "load"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "request path joined to FILE_LOADER_ROOT_PATH and opened",
+   "why_patched_safe": "commonpath containment check",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-g28h-2cmm-rj9x",
+   "cve": null,
+   "advisory_cwes": [
+    "CWE-22"
+   ],
+   "package": "langchain-nvidia-ai-endpoints",
+   "summary": "langchain-nvidia-ai-endpoints has local file disclosure through VLM image inputs",
+   "repo": "langchain-ai/langchain-nvidia",
+   "license": "MIT",
+   "vulnerable_commit": "7ebc4cb23a756cd54931b6deb8c6f0450f32ff02",
+   "fix_commit": "b483c7cad07dd9d5fd0fee2668238c4a08825d86",
+   "category": "pathtraver",
+   "rule": "SEC013",
+   "scope": "modelled",
+   "split": "heldout",
+   "sites": [
+    {
+     "file": "libs/ai-endpoints/langchain_nvidia_ai_endpoints/_utils.py",
+     "vulnerable_functions": [
+      "_url_to_b64_string"
+     ],
+     "patched_functions": [
+      "_url_to_b64_string"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "image_source string opened as a local file when it exists",
+   "why_patched_safe": "local file branch removed",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-h7ww-273w-6cm8",
+   "cve": "CVE-2026-115355",
+   "advisory_cwes": [
+    "CWE-22"
+   ],
+   "package": "mistune",
+   "summary": "Mistune: Path Traversal and XSS in Include directive",
+   "repo": "lepture/mistune",
+   "license": "BSD-3-Clause",
+   "vulnerable_commit": "c7101fcbb6e8790e8e39157c5ca2238fc6dd6cbc",
+   "fix_commit": "1bef343ade163fc3bb95572b15be720084cdb993",
+   "category": "pathtraver",
+   "rule": "SEC013",
+   "scope": "modelled",
+   "split": "heldout",
+   "sites": [
+    {
+     "file": "src/mistune/directives/include.py",
+     "vulnerable_functions": [
+      "Include.parse"
+     ],
+     "patched_functions": [
+      "Include.parse"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "include directive path joined to the source directory and opened",
+   "why_patched_safe": "realpath + commonpath containment, absolute paths rejected",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-9jj8-v89v-xjvw",
+   "cve": "CVE-2026-25527",
+   "advisory_cwes": [
+    "CWE-22"
+   ],
+   "package": "changedetection.io",
+   "summary": "changedetection.io is vulnerable to unauthenticated static path traversal",
+   "repo": "dgtlmoon/changedetection.io",
+   "license": "Apache-2.0",
+   "vulnerable_commit": "3558e9ee10cfe19cfe9209e469e43e9327c26735",
+   "fix_commit": "9d38b4517364831889b5b0d7b3465fd060403fd4",
+   "category": "pathtraver",
+   "rule": "SEC013",
+   "scope": "api_not_modelled",
+   "split": "heldout",
+   "sites": [
+    {
+     "file": "changedetectionio/flask_app.py",
+     "vulnerable_functions": [
+      "changedetection_app.static_content"
+     ],
+     "patched_functions": [
+      "changedetection_app.static_content"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "route parameter (dots allowed) used as the *directory* argument of send_from_directory (not modelled)",
+   "why_patched_safe": "group/filename reduced to [a-z0-9_]",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-793v-gxfp-9q9h",
+   "cve": "CVE-2025-25362",
+   "advisory_cwes": [
+    "CWE-94",
+    "CWE-1336"
+   ],
+   "package": "spacy-llm",
+   "summary": "Spacy-LLM Server-Side Template Injection (SSTI) vulnerability",
+   "repo": "explosion/spacy-llm",
+   "license": "MIT",
+   "vulnerable_commit": "117f68963870fd2a4af4c706c40cf223c6ae6fde",
+   "fix_commit": "8bde0490cc1e9de9dd2e84480b7b5cd18a94d739",
+   "category": "ssti",
+   "rule": "SEC015",
+   "scope": "modelled",
+   "split": "heldout",
+   "sites": [
+    {
+     "file": "spacy_llm/tasks/builtin_task.py",
+     "vulnerable_functions": [
+      "BuiltinTask.generate_prompts"
+     ],
+     "patched_functions": [
+      "BuiltinTask.generate_prompts"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "user-configured template compiled with jinja2.Environment().from_string",
+   "why_patched_safe": "jinja2.sandbox.SandboxedEnvironment",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-cxfr-5q3r-2rc2",
+   "cve": "CVE-2023-6709",
+   "advisory_cwes": [
+    "CWE-1336"
+   ],
+   "package": "mlflow",
+   "summary": "Jinja2 template injection in mlflow",
+   "repo": "mlflow/mlflow",
+   "license": "Apache-2.0",
+   "vulnerable_commit": "42f57ff7be3a22e072f48b011ed2c5e15efd71b6",
+   "fix_commit": "432b8ccf27fd3a76df4ba79bb1bec62118a85625",
+   "category": "ssti",
+   "rule": "SEC015",
+   "scope": "modelled",
+   "split": "heldout",
+   "sites": [
+    {
+     "file": "mlflow/recipes/cards/__init__.py",
+     "vulnerable_functions": [
+      "CardTab.to_html"
+     ],
+     "patched_functions": [
+      "CardTab.to_html"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "card template compiled with jinja2.Environment(...).from_string",
+   "why_patched_safe": "SandboxedEnvironment",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-h92g-3xc3-ww2r",
+   "cve": "CVE-2025-49619",
+   "advisory_cwes": [
+    "CWE-1336"
+   ],
+   "package": "skyvern",
+   "summary": "Skyvern has a Jinja runtime leak",
+   "repo": "Skyvern-AI/skyvern",
+   "license": "AGPL-3.0",
+   "vulnerable_commit": "4905c03fd593b5ee86499a2342e97d818c26fbcb",
+   "fix_commit": "db856cd8433a204c8b45979c70a4da1e119d949d",
+   "category": "ssti",
+   "rule": "SEC015",
+   "scope": "modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "skyvern/forge/sdk/workflow/models/block.py",
+     "vulnerable_functions": [
+      "Block.format_block_parameter_template_from_workflow_run_context"
+     ],
+     "patched_functions": [
+      "Block.format_block_parameter_template_from_workflow_run_context"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "workflow parameter compiled with jinja2.Template",
+   "why_patched_safe": "SandboxedEnvironment().from_string",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-9mq4-9556-6qxq",
+   "cve": "CVE-2021-4315",
+   "advisory_cwes": [
+    "CWE-94",
+    "CWE-1336"
+   ],
+   "package": "psiTurk",
+   "summary": "NYUCCL psiTurk IS vulnerable to Improper Neutralization of Special Elements",
+   "repo": "NYUCCL/psiTurk",
+   "license": "MIT",
+   "vulnerable_commit": "231d566ea3a76534a507dd68840524952c10d5d9",
+   "fix_commit": "47787e15cecd66f2aa87687bf852ae0194a4335f",
+   "category": "ssti",
+   "rule": "SEC015",
+   "scope": "modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "psiturk/experiment.py",
+     "vulnerable_functions": [
+      "advertisement",
+      "give_consent"
+     ],
+     "patched_functions": [
+      "advertisement",
+      "give_consent"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "request argument 'mode' concatenated into page HTML rendered with render_template_string",
+   "why_patched_safe": "mode passed as a template variable ({{ mode }})",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-58cw-g322-p94v",
+   "cve": "CVE-2026-44896",
+   "advisory_cwes": [
+    "CWE-79"
+   ],
+   "package": "mistune",
+   "summary": "Mistune has XSS via unescaped figclass/figwidth in Figure directive",
+   "repo": "lepture/mistune",
+   "license": "BSD-3-Clause",
+   "vulnerable_commit": "aa4a81449dd397e384e9b39d1e60ba9be9bf5182",
+   "fix_commit": "a3cb6e5655308797e8be021d6c7b5bab13cbace2",
+   "category": "xss",
+   "rule": "SEC014",
+   "scope": "api_not_modelled",
+   "split": "heldout",
+   "sites": [
+    {
+     "file": "src/mistune/directives/image.py",
+     "vulnerable_functions": [
+      "render_figure"
+     ],
+     "patched_functions": [
+      "render_figure"
+     ]
+    },
+    {
+     "file": "src/mistune/directives/admonition.py",
+     "vulnerable_functions": [
+      "render_admonition"
+     ],
+     "patched_functions": [
+      "render_admonition"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "directive options concatenated into returned HTML",
+   "why_patched_safe": "escape_text()",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-6269-cqxg-mhhv",
+   "cve": "CVE-2026-44898",
+   "advisory_cwes": [
+    "CWE-79"
+   ],
+   "package": "mistune",
+   "summary": "Mistune TOC Anchor Injection XSS",
+   "repo": "lepture/mistune",
+   "license": "BSD-3-Clause",
+   "vulnerable_commit": "85eb54ff17da26327399bf188f9ff9b8fd515278",
+   "fix_commit": "04880a004cb28318e5ebd7ee9e63c79fc9f9ed04",
+   "category": "xss",
+   "rule": "SEC014",
+   "scope": "api_not_modelled",
+   "split": "heldout",
+   "sites": [
+    {
+     "file": "src/mistune/toc.py",
+     "vulnerable_functions": [
+      "render_toc_ul"
+     ],
+     "patched_functions": [
+      "render_toc_ul"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "heading id formatted into <a href> in returned HTML",
+   "why_patched_safe": "escape(k)",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-75mw-h36v-2jv7",
+   "cve": null,
+   "advisory_cwes": [
+    "CWE-79"
+   ],
+   "package": "dosage",
+   "summary": "Dosage Vulnerable to Stored Cross-Site Scripting (XSS) in HTML/RSS Output Handlers",
+   "repo": "webcomics/dosage",
+   "license": "MIT",
+   "vulnerable_commit": "f2817cca7ff5511d9be56750b2d2165d4c3b2f14",
+   "fix_commit": "b91fd5cc3889aed3d9cc81b98834648197b2859a",
+   "category": "xss",
+   "rule": "SEC014",
+   "scope": "api_not_modelled",
+   "split": "heldout",
+   "sites": [
+    {
+     "file": "dosagelib/events.py",
+     "vulnerable_functions": [
+      "HtmlEventHandler.comicDownloaded",
+      "RSSEventHandler.comicDownloaded"
+     ],
+     "patched_functions": [
+      "HtmlEventHandler.comicDownloaded",
+      "RSSEventHandler.comicDownloaded"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "remote comic text written into HTML/RSS output",
+   "why_patched_safe": "html.escape",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-gx2m-mcc2-r4p3",
+   "cve": "CVE-2026-42150",
+   "advisory_cwes": [
+    "CWE-79"
+   ],
+   "package": "wlc",
+   "summary": "wlc: print_html outputs API data without HTML escaping",
+   "repo": "WeblateOrg/wlc",
+   "license": "GPL-3.0",
+   "vulnerable_commit": "48df3b57f21c432212aa5ced0b24b88db119d647",
+   "fix_commit": "0f3e58f6d7457b05d48ef40f579a172c4c8b8469",
+   "category": "xss",
+   "rule": "SEC014",
+   "scope": "api_not_modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "wlc/main.py",
+     "vulnerable_functions": [
+      "Command.print_html"
+     ],
+     "patched_functions": [
+      "Command.print_html"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "API values printed into an HTML table",
+   "why_patched_safe": "html.escape via format_html_value",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-hvq6-2r72-p2x7",
+   "cve": "CVE-2026-75526",
+   "advisory_cwes": [
+    "CWE-79"
+   ],
+   "package": "django-cms",
+   "summary": "django CMS: Stored XSS in edit-mode plugin exception rendering",
+   "repo": "django-cms/django-cms",
+   "license": "BSD-3-Clause (GitHub: NOASSERTION)",
+   "vulnerable_commit": "27b1f6313232ea7806b25dc8a207dabf3a8f6d29",
+   "fix_commit": "b56a568844ff3702495945f73a31d0868285bf88",
+   "category": "xss",
+   "rule": "SEC014",
+   "scope": "api_not_modelled",
+   "split": "heldout",
+   "sites": [
+    {
+     "file": "cms/plugin_rendering.py",
+     "vulnerable_functions": [
+      "ContentRenderer.render_exception"
+     ],
+     "patched_functions": [
+      "ContentRenderer.render_exception"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "exception message interpolated into an HTML heading",
+   "why_patched_safe": "django format_html",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  },
+  {
+   "id": "GHSA-w7rv-gfp4-j9j3",
+   "cve": "CVE-2026-34231",
+   "advisory_cwes": [
+    "CWE-79"
+   ],
+   "package": "slippers",
+   "summary": "Slippers Vulnerable to Cross-Site Scripting (XSS) in `attrs` Template Tag",
+   "repo": "mixxorz/slippers",
+   "license": "MIT",
+   "vulnerable_commit": "935613c395cb2efb3731f8d7d6352a05f64988b3",
+   "fix_commit": "16cc4ef4fa8ad2f7aee30798f16c3e7b653423b2",
+   "category": "xss",
+   "rule": "SEC014",
+   "scope": "api_not_modelled",
+   "split": "dev",
+   "sites": [
+    {
+     "file": "slippers/templatetags/slippers.py",
+     "vulnerable_functions": [
+      "attr_string"
+     ],
+     "patched_functions": [
+      "attr_string"
+     ]
+    }
+   ],
+   "patched_applicable": true,
+   "why_vulnerable": "attribute value interpolated into key=\"value\" markup",
+   "why_patched_safe": "django format_html",
+   "label_source": "manual reading of advisory + fix diff; not derived from analyzer output",
+   "independent_review": false
+  }
+ ],
+ "excluded": {
+  "GHSA-4h97-wpxp-3757": "SQL assembled in query-builder helpers and executed via objects elsewhere; site not attributable",
+  "GHSA-7p73-8jqx-23r8": "duplicate of GHSA-4h97 (same fix commit)",
+  "GHSA-v3c8-3pr6-gr7p": "referenced commit does not contain the SQL fix",
+  "GHSA-7gj6-22m4-qfhx": "feature executes user SQL by design; fix is a keyword blocklist",
+  "GHSA-pmch-g965-grmr": "blocklist on intentionally executed SQL",
+  "GHSA-92qf-8gh3-gwcm": "configuration-only change",
+  "GHSA-gvg8-93h5-g6qq": "ORM-internal alias validation regex",
+  "GHSA-mwm9-4648-f68q": "ORM-internal type check",
+  "GHSA-hgjp-83m4-h4fj": "DB driver internal escaping",
+  "GHSA-v9hf-5j83-6xpp": "DB driver internal escaping",
+  "GHSA-xxh2-68g9-8jqr": "SQLAlchemy expression API (no SQL text)",
+  "GHSA-7587-9684-52r6": "Databricks SDK statement API",
+  "GHSA-9gm9-c8mq-vq7m": "command executed in another module",
+  "GHSA-9qhq-v63v-fv3j": "duplicate of GHSA-9gm9",
+  "GHSA-rvhj-8chj-8v3c": "command string executed in another module",
+  "GHSA-v5gf-r78h-55q6": "templates rendered in another module",
+  "GHSA-w584-2h2r-2hvf": "duplicate fix of GHSA-v798",
+  "GHSA-r4rv-85jg-w4mf": "duplicate fix of GHSA-h7ww",
+  "GHSA-g97x-gvcm-x72h": "duplicate fix of GHSA-58cw"
+ },
+ "label_corrections": {
+  "GHSA-rf7p-79xq-8xwm": "patched revision originally labelled safe ('both values wrapped in shlex.quote'), which described the *later* code shown in GHSA-qqv2's diff. Re-reading the fix commit's file shows only a scheme assert; the patched side is therefore not a valid negative and is excluded (patched_applicable=False). Re-inspection was prompted by an analyzer finding on the patched file; the corrected label rests on the source text and advisory GHSA-qqv2-35q8-p2g2."
+ }
+}

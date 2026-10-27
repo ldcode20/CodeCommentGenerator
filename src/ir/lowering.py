@@ -63,7 +63,9 @@ def _target_names(target: ast.AST) -> Iterable[str]:
 class _BindingCollector(ast.NodeVisitor):
     """Collect names bound in a function body without entering nested scopes."""
 
-    def __init__(self):
+    def __init__(self, module_name: str = "", is_package: bool = False):
+        self.module_name = module_name
+        self.is_package = is_package
         self.bound: Set[str] = set()
         self.loaded: Set[str] = set()
         self.globals: Set[str] = set()
@@ -106,7 +108,7 @@ class _BindingCollector(ast.NodeVisitor):
             self.imports[local] = alias.name if alias.asname else alias.name.split(".")[0]
 
     def visit_ImportFrom(self, node):
-        mod = node.module or ""
+        mod = resolve_relative(node.module, node.level, self.module_name, self.is_package)
         for alias in node.names:
             local = alias.asname or alias.name
             self.imports[local] = f"{mod}.{alias.name}" if mod else alias.name
@@ -131,7 +133,19 @@ class _BindingCollector(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-def collect_module_imports(tree: ast.Module) -> Dict[str, str]:
+def resolve_relative(module: Optional[str], level: int, current: str, is_package: bool = False) -> str:
+    """Absolute dotted name for ``from <level dots><module> import ...`` inside ``current``."""
+    if not level:
+        return module or ""
+    parts = current.split(".") if current else []
+    base = parts if is_package else parts[:-1]
+    if level > 1:
+        base = base[:len(base) - (level - 1)] if level - 1 <= len(base) else []
+    return ".".join(base + ([module] if module else []))
+
+
+def collect_module_imports(tree: ast.Module, module_name: str = "",
+                           is_package: bool = False) -> Dict[str, str]:
     """Import aliases bound at module scope (also inside module-level if/try)."""
     imports: Dict[str, str] = {}
 
@@ -142,7 +156,7 @@ def collect_module_imports(tree: ast.Module) -> Dict[str, str]:
                     local = alias.asname or alias.name.split(".")[0]
                     imports[local] = alias.name if alias.asname else alias.name.split(".")[0]
             elif isinstance(st, ast.ImportFrom):
-                mod = st.module or ""
+                mod = resolve_relative(st.module, st.level, module_name, is_package)
                 for alias in st.names:
                     local = alias.asname or alias.name
                     imports[local] = f"{mod}.{alias.name}" if mod else alias.name
@@ -314,6 +328,10 @@ def branch_refinements(test: ast.AST, canonical) -> Tuple[List[Refinement], List
 
     if isinstance(test, ast.Compare) and len(test.ops) == 1:
         left, op, right = test.left, test.ops[0], test.comparators[0]
+        if (isinstance(left, ast.Constant) and isinstance(left.value, str) and ".." in left.value
+                and isinstance(right, ast.Name) and isinstance(op, (ast.In, ast.NotIn))):
+            # if '../' in p: reject  →  the continuing edge has only a weak substring check
+            return on(right.id, "dotdot_check", isinstance(op, ast.NotIn))
         if isinstance(left, ast.Name):
             if isinstance(op, (ast.In, ast.NotIn)) and _is_const_collection(right):
                 return on(left.id, "allowlist", isinstance(op, ast.In))
@@ -330,6 +348,14 @@ def branch_refinements(test: ast.AST, canonical) -> Tuple[List[Refinement], List
 
     if isinstance(test, ast.Call):
         func = test.func
+        subject = func.value if isinstance(func, ast.Attribute) else None
+        # str(p).startswith(...) / os.fspath(p).startswith(...) test the path object p itself
+        if (isinstance(subject, ast.Call) and len(subject.args) == 1 and not subject.keywords
+                and isinstance(subject.args[0], ast.Name)
+                and (canonical(subject.func) in ("str", "os.fspath")
+                     or (isinstance(subject.func, ast.Name) and subject.func.id == "str"))
+                and func.attr in ("startswith", "is_relative_to")):
+            return on(subject.args[0].id, "path_prefix", True)
         if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
             var = func.value.id
             if func.attr in _CHARSET_METHODS:
@@ -376,7 +402,7 @@ class FunctionLowerer:
         self.is_module = node is None
         self.body = body if body is not None else node.body  # type: ignore[union-attr]
 
-        collector = _BindingCollector()
+        collector = _BindingCollector(module.module_name, module.is_package)
         for st in self.body:
             collector.visit(st)
         params: List[str] = []
@@ -416,6 +442,7 @@ class FunctionLowerer:
         self._counters: Dict[str, int] = {}
         self.cur: Optional[IRBlock] = None
         self.loops: List[_LoopCtx] = []
+        self.finally_exits: List[str] = []   # innermost try/finally a return/raise must run
         self.guards: List[str] = []
         self.stmt_src = ""
         self.stmt_line = getattr(node, "lineno", 1)
@@ -566,7 +593,7 @@ class FunctionLowerer:
             name = self.canonical(func) or (func.id if isinstance(func, ast.Name)
                                             and func.id not in self.locals else None)
             if name in NORETURN_CALLS:
-                self.jump("exit", kind="noreturn")
+                self.jump(self.exit_target(), kind="noreturn")
 
     def s_Pass(self, st):
         pass
@@ -638,15 +665,19 @@ class FunctionLowerer:
         else:
             self.note(f"assignment target '{type(target).__name__}' not modelled")
 
+    def exit_target(self) -> str:
+        """Where a return/raise goes: the enclosing finally copy, else the exit block."""
+        return self.finally_exits[-1] if self.finally_exits else "exit"
+
     def s_Return(self, st: ast.Return):
         v = self.expr(st.value) if st.value is not None else self.const(None, st)
         self.emit(IROpcode.ASSIGN, result=RETURN_VAR, operands=[v], node=st, kind="return")
-        self.jump("exit")
+        self.jump(self.exit_target())
 
     def s_Raise(self, st: ast.Raise):
         if st.exc is not None:
             self.expr(st.exc)
-        self.jump("exit", kind="raise")
+        self.jump(self.exit_target(), kind="raise")
 
     def s_Assert(self, st: ast.Assert):
         self.expr(st.test)
@@ -787,6 +818,9 @@ class FunctionLowerer:
         body_l = f"try_{n}_body"
         after_l = f"try_{n}_after"
         final_l = f"try_{n}_finally"
+        final_exit_l = f"try_{n}_finally_exit"
+        if st.finalbody:
+            self.finally_exits.append(final_exit_l)
         self.start_block(body_l, kind="try_body", loop_depth=len(self.loops))
         first = len(self.fn.blocks) - 1
         self.lower_stmts(st.body)
@@ -818,6 +852,7 @@ class FunctionLowerer:
                 self.jump(target)
         self.cur = None
         if st.finalbody:
+            self.finally_exits.pop()
             fin = self.new_block(final_l, kind="finally", loop_depth=len(self.loops))
             for b in self.fn.blocks:
                 if final_l in b.successors and b.label not in fin.predecessors:
@@ -825,11 +860,19 @@ class FunctionLowerer:
             if not st.handlers:
                 for bl in body_blocks:
                     self._link_labels(bl, final_l)
-            if any(isinstance(x, ast.Return) for x in ast.walk(ast.Module(body=st.body, type_ignores=[]))):
-                self.note("return inside try/finally bypasses the finally block in the CFG")
             self.cur = fin
             self.lower_stmts(st.finalbody)
             self.jump(after_l)
+            # return/raise inside the try: run a copy of the finally body, then leave.
+            leaving = [b for b in self.fn.blocks if final_exit_l in b.successors]
+            if leaving:
+                self.cur = None
+                fx = self.new_block(final_exit_l, kind="finally_exit", loop_depth=len(self.loops))
+                for b in leaving:
+                    fx.predecessors.append(b.label)
+                self.cur = fx
+                self.lower_stmts(st.finalbody)
+                self.jump(self.exit_target())
         after = self.new_block(after_l, kind="try_after", loop_depth=len(self.loops))
         for b in self.fn.blocks:
             if after_l in b.successors and b.label not in after.predecessors:
@@ -879,7 +922,8 @@ class FunctionLowerer:
         for k, case in enumerate(st.cases):
             lbl = f"match_{n}_case_{k}"
             self.cur = None
-            self.new_block(lbl, kind="match_case", loop_depth=len(self.loops))
+            blk = self.new_block(lbl, kind="match_case", loop_depth=len(self.loops))
+            blk.meta["match_values"] = _match_values(case)
             self.link(head, lbl)
             self.cur = self.fn.get_block(lbl)
             for node in ast.walk(case.pattern):
@@ -1024,6 +1068,8 @@ class FunctionLowerer:
         return t
 
     def _build(self, kind: str, elts: List[ast.AST], node: ast.AST, **meta) -> str:
+        if any(isinstance(e, ast.Starred) for e in elts):
+            meta["starred"] = "1"
         ops = [self.expr(e) for e in elts if e is not None]
         t = self.temp()
         self.emit(IROpcode.BUILD, result=t, operands=ops, node=node, kind=kind, **meta)
@@ -1039,10 +1085,19 @@ class FunctionLowerer:
         return self._build("set", node.elts, node)
 
     def e_Dict(self, node: ast.Dict):
-        return self._build("dict", [k for k in node.keys if k is not None] + list(node.values), node)
+        meta = {"nkeys": str(sum(1 for k in node.keys if k is not None))}
+        if any(k is None for k in node.keys):
+            meta["starred"] = "1"
+        return self._build("dict", [k for k in node.keys if k is not None] + list(node.values), node,
+                           **meta)
 
     def e_Slice(self, node: ast.Slice):
-        return self._build("slice", [node.lower, node.upper, node.step], node, taint_ops="0")
+        # Missing bounds are explicit None constants so positions are preserved (x[1:] != x[:1]).
+        parts = [self.expr(p) if p is not None else self.const(None, node)
+                 for p in (node.lower, node.upper, node.step)]
+        t = self.temp()
+        self.emit(IROpcode.BUILD, result=t, operands=parts, node=node, kind="slice", taint_ops="0")
+        return t
 
     def e_JoinedStr(self, node: ast.JoinedStr) -> str:
         parts: List[ast.AST] = []
@@ -1128,6 +1183,25 @@ class FunctionLowerer:
         return t
 
 
+def _match_values(case) -> str:
+    """repr() of the constants a case matches, 'wildcard', or 'unknown' (guards, captures, ...)."""
+    if case.guard is not None:
+        return "unknown"
+    pat = case.pattern
+    if isinstance(pat, ast.MatchAs) and pat.pattern is None:
+        return "wildcard"
+    alts = pat.patterns if isinstance(pat, ast.MatchOr) else [pat]
+    values = []
+    for a in alts:
+        if isinstance(a, ast.MatchValue) and isinstance(a.value, ast.Constant):
+            values.append(a.value.value)
+        elif isinstance(a, ast.MatchSingleton):
+            values.append(a.value)
+        else:
+            return "unknown"
+    return repr(values)
+
+
 def _safe_unparse(node: ast.AST) -> str:
     try:
         return ast.unparse(node)
@@ -1142,12 +1216,16 @@ def _safe_unparse(node: ast.AST) -> str:
 class ModuleLowerer:
     """Lower a whole module: every function, method, nested function and the module body."""
 
-    def __init__(self, tree: ast.Module, source: str = "", filepath: str = ""):
+    def __init__(self, tree: ast.Module, source: str = "", filepath: str = "",
+                 module_name: str = "", is_package: bool = False):
         self.tree = tree
         self.source_lines = source.splitlines()
         self.filepath = filepath
-        self.imports = collect_module_imports(tree)
+        self.module_name = module_name
+        self.is_package = is_package
+        self.imports = collect_module_imports(tree, module_name, is_package)
         self.functions: List[IRFunction] = []
+        self.classes: List[str] = []
         self.by_node: Dict[int, IRFunction] = {}
 
     def lower_function(self, node, qualname: str, class_name: Optional[str],
@@ -1156,11 +1234,13 @@ class ModuleLowerer:
         if enclosing is not None and not enclosing.is_module:
             fl.fn.enclosing = enclosing.qualname
         fn = fl.lower()
+        fn.source_file = self.filepath
         self.functions.append(fn)
         self.by_node[id(node)] = fn
         return fn
 
     def lower_class(self, node: ast.ClassDef, prefix: str) -> None:
+        self.classes.append(prefix)
         for item in node.body:
             if isinstance(item, _FUNC_NODES):
                 self.lower_function(item, f"{prefix}.{item.name}", node.name)
@@ -1171,11 +1251,18 @@ class ModuleLowerer:
         body_lowerer = FunctionLowerer(self, None, MODULE_QUALNAME, body=self.tree.body)
         module_body = body_lowerer.lower()
         module_body.end_lineno = len(self.source_lines)
+        module_body.source_file = self.filepath
         self.functions.sort(key=lambda f: (f.source_lineno, f.qualname))
         return IRModule(source_file=self.filepath, functions=list(self.functions),
-                        imports=dict(self.imports), module_body=module_body)
+                        imports=dict(self.imports), module_body=module_body,
+                        module_name=self.module_name, classes=list(self.classes))
 
 
-def lower_module(tree: ast.Module, source: str = "", filepath: str = "") -> IRModule:
-    """Lower every function (including methods and nested functions) plus the module body."""
-    return ModuleLowerer(tree, source, filepath).lower()
+def lower_module(tree: ast.Module, source: str = "", filepath: str = "",
+                 module_name: str = "", is_package: bool = False) -> IRModule:
+    """Lower every function (including methods and nested functions) plus the module body.
+
+    ``module_name`` (dotted) enables relative-import resolution; function qualnames stay
+    module-local — project analysis prefixes them (see ``security.project``).
+    """
+    return ModuleLowerer(tree, source, filepath, module_name, is_package).lower()
