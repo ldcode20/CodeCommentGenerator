@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1010" viewBox="0 0 1400 1010">
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+<path d="M0,0 L10,5 L0,10 z" fill="#444"/></marker>
+<style>
+text{font-family:'Segoe UI',Arial,Helvetica,sans-serif;text-anchor:middle;fill:#202124}
+.T{font-size:28px;font-weight:700}
+.st{font-size:15px;fill:#5f6368}
+.h{font-size:17px;font-weight:700;text-anchor:start}
+.t{font-size:16px;font-weight:600}
+.s{font-size:13px;fill:#5f6368}
+.n{font-size:20px;font-weight:700;fill:#fff}
+</style></defs>
+<rect width="1400" height="1010" fill="#ffffff"/>
+<text x="700.0" y="44" class="T">CodeCommentGenerator — Architecture</text>
+<text x="700.0" y="70" class="st">One Python file (or a project folder) goes in; commented code, a code-quality report and a security report come out.</text>
+<rect x="40" y="95" width="1320" height="120" rx="16" fill="#f1f3f4" stroke="#5f6368" stroke-width="2"/>
+<text x="58" y="125" class="h" fill="#5f6368">1  Input &amp; entry points</text>
+<rect x="70" y="135" width="300" height="62" rx="10" fill="#fff" stroke="#5f6368" stroke-width="2"/>
+<text x="220.0" y="161.0" class="t">Python source</text>
+<text x="220.0" y="181.0" class="s">a .py file or a project folder</text>
+<rect x="450" y="135" width="270" height="62" rx="10" fill="#ffffff" stroke="#5f6368" stroke-width="2"/>
+<text x="585.0" y="161.0" class="t">Command line</text>
+<text x="585.0" y="181.0" class="s">src/main.py</text>
+<rect x="760" y="135" width="270" height="62" rx="10" fill="#ffffff" stroke="#5f6368" stroke-width="2"/>
+<text x="895.0" y="161.0" class="t">Security-only CLI</text>
+<text x="895.0" y="181.0" class="s">python -m src.security</text>
+<rect x="1070" y="135" width="260" height="62" rx="10" fill="#ffffff" stroke="#5f6368" stroke-width="2"/>
+<text x="1200.0" y="161.0" class="t">Desktop GUI</text>
+<text x="1200.0" y="181.0" class="s">src/gui  (PyQt workspaces)</text>
+<line x1="370" y1="166" x2="446" y2="166" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<rect x="40" y="245" width="1320" height="125" rx="16" fill="#f1f3f4" stroke="#5f6368" stroke-width="2"/>
+<text x="58" y="275" class="h" fill="#5f6368">2  Front end (shared by every stage)</text>
+<rect x="90" y="285" width="265" height="62" rx="10" fill="#ffffff" stroke="#5f6368" stroke-width="2"/>
+<text x="222.5" y="311.0" class="t">Parse</text>
+<text x="222.5" y="331.0" class="s">parser_module</text>
+<rect x="407" y="285" width="265" height="62" rx="10" fill="#ffffff" stroke="#5f6368" stroke-width="2"/>
+<text x="539.5" y="311.0" class="t">Validate</text>
+<text x="539.5" y="331.0" class="s">validator</text>
+<line x1="355" y1="316" x2="403" y2="316" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<rect x="724" y="285" width="265" height="62" rx="10" fill="#ffffff" stroke="#5f6368" stroke-width="2"/>
+<text x="856.5" y="311.0" class="t">Extract AST features</text>
+<text x="856.5" y="331.0" class="s">ast_extractor</text>
+<line x1="672" y1="316" x2="720" y2="316" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<rect x="1041" y="285" width="265" height="62" rx="10" fill="#ffffff" stroke="#5f6368" stroke-width="2"/>
+<text x="1173.5" y="311.0" class="t">Analyse context</text>
+<text x="1173.5" y="331.0" class="s">context_analyzer</text>
+<line x1="989" y1="316" x2="1037" y2="316" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<line x1="700" y1="215" x2="700" y2="281" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<rect x="40" y="410" width="420" height="430" rx="16" fill="#e8f0fe" stroke="#3367d6" stroke-width="2"/>
+<text x="58" y="440" class="h" fill="#3367d6">3a  Comment generation</text>
+<rect x="490" y="410" width="420" height="430" rx="16" fill="#e6f4ea" stroke="#1e8e3e" stroke-width="2"/>
+<text x="508" y="440" class="h" fill="#1e8e3e">3b  Code-quality analysis</text>
+<rect x="940" y="410" width="420" height="430" rx="16" fill="#fce8e6" stroke="#c5221f" stroke-width="2"/>
+<text x="958" y="440" class="h" fill="#c5221f">3c  Security analysis</text>
+<path d="M700,370 L700,388 L250.0,388 L250.0,408" fill="none" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<path d="M700,370 L700,388 L700.0,388 L700.0,408" fill="none" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<path d="M700,370 L700,388 L1150.0,388 L1150.0,408" fill="none" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<rect x="70" y="455" width="360" height="150" rx="10" fill="#ffffff" stroke="#3367d6" stroke-width="2"/>
+<text x="250.0" y="535.0" class="t"></text>
+<text x="250.0" y="484" class="t">Pick a generator engine</text>
+<rect x="82" y="502" width="104" height="86" rx="10" fill="#f8faff" stroke="#3367d6" stroke-width="2"/>
+<text x="134.0" y="540.0" class="t">Rule-based</text>
+<text x="134.0" y="560.0" class="s">templates</text>
+<rect x="198" y="502" width="104" height="86" rx="10" fill="#f8faff" stroke="#3367d6" stroke-width="2"/>
+<text x="250.0" y="540.0" class="t">ML</text>
+<text x="250.0" y="560.0" class="s">AST + NLP</text>
+<rect x="314" y="502" width="104" height="86" rx="10" fill="#f8faff" stroke="#3367d6" stroke-width="2"/>
+<text x="366.0" y="540.0" class="t">Hybrid</text>
+<text x="366.0" y="560.0" class="s">neuro-symbolic</text>
+<line x1="250" y1="605" x2="250" y2="646" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<rect x="70" y="650" width="360" height="62" rx="10" fill="#ffffff" stroke="#3367d6" stroke-width="2"/>
+<text x="250.0" y="676.0" class="t">Attach comments</text>
+<text x="250.0" y="696.0" class="s">comment_attacher (docstrings + inline)</text>
+<line x1="250" y1="712" x2="250" y2="746" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<rect x="70" y="750" width="360" height="62" rx="10" fill="#ffffff" stroke="#3367d6" stroke-width="2"/>
+<text x="250.0" y="776.0" class="t">Annotated source code</text>
+<text x="250.0" y="796.0" class="s">original code + generated comments</text>
+<rect x="520" y="455" width="360" height="62" rx="10" fill="#ffffff" stroke="#1e8e3e" stroke-width="2"/>
+<text x="700.0" y="481.0" class="t">Build IR</text>
+<text x="700.0" y="501.0" class="s">ir/  (3-address code, basic blocks)</text>
+<line x1="700" y1="517" x2="700" y2="551" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<rect x="520" y="555" width="360" height="62" rx="10" fill="#ffffff" stroke="#1e8e3e" stroke-width="2"/>
+<text x="700.0" y="581.0" class="t">Control-flow graph + data flow</text>
+<text x="700.0" y="601.0" class="s">analysis/cfg_builder, dfa_engine</text>
+<line x1="700" y1="617" x2="700" y2="651" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<rect x="520" y="655" width="360" height="62" rx="10" fill="#ffffff" stroke="#1e8e3e" stroke-width="2"/>
+<text x="700.0" y="681.0" class="t">Pattern detector</text>
+<text x="700.0" y="701.0" class="s">P001–P007: dead code, unused vars, …</text>
+<line x1="700" y1="717" x2="700" y2="746" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<rect x="520" y="750" width="360" height="62" rx="10" fill="#ffffff" stroke="#1e8e3e" stroke-width="2"/>
+<text x="700.0" y="786.0" class="t">Code-quality report</text>
+<rect x="970" y="455" width="360" height="62" rx="10" fill="#ffffff" stroke="#c5221f" stroke-width="2"/>
+<text x="1150.0" y="481.0" class="t">Lower code to IR + CFG</text>
+<text x="1150.0" y="501.0" class="s">ir/lowering</text>
+<line x1="1060" y1="517" x2="1060" y2="551" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<line x1="1240" y1="517" x2="1240" y2="551" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<rect x="970" y="555" width="175" height="100" rx="10" fill="#ffffff" stroke="#c5221f" stroke-width="2"/>
+<text x="1057.5" y="590.0" class="t">Taint engine</text>
+<text x="1057.5" y="610.0" class="s">source → sink,</text>
+<text x="1057.5" y="630.0" class="s">sanitizers, cross-file</text>
+<rect x="1155" y="555" width="175" height="100" rx="10" fill="#ffffff" stroke="#c5221f" stroke-width="2"/>
+<text x="1242.5" y="590.0" class="t">AST rules</text>
+<text x="1242.5" y="610.0" class="s">secrets, weak hash,</text>
+<text x="1242.5" y="630.0" class="s">bare except, …</text>
+<line x1="1060" y1="655" x2="1060" y2="670" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<line x1="1240" y1="655" x2="1240" y2="670" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<rect x="970" y="674" width="360" height="60" rx="10" fill="#ffffff" stroke="#c5221f" stroke-width="2"/>
+<text x="1150.0" y="699.0" class="t">Findings</text>
+<text x="1150.0" y="719.0" class="s">rule · CWE · severity · confidence · trace</text>
+<line x1="1150" y1="734" x2="1150" y2="746" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<rect x="970" y="750" width="360" height="62" rx="10" fill="#ffffff" stroke="#c5221f" stroke-width="2"/>
+<text x="1150.0" y="776.0" class="t">Security report</text>
+<text x="1150.0" y="796.0" class="s">SEC001–SEC015 (text / JSON)</text>
+<rect x="40" y="875" width="1320" height="105" rx="16" fill="#f1f3f4" stroke="#5f6368" stroke-width="2"/>
+<text x="58" y="905" class="h" fill="#5f6368">4  Outputs</text>
+<line x1="250" y1="812" x2="250" y2="914" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<line x1="700" y1="812" x2="700" y2="914" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<line x1="1150" y1="812" x2="1150" y2="914" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<rect x="90" y="918" width="320" height="48" rx="10" fill="#ffffff" stroke="#5f6368" stroke-width="2"/>
+<text x="250.0" y="947.0" class="t">Commented .py file</text>
+<rect x="540" y="918" width="320" height="48" rx="10" fill="#ffffff" stroke="#5f6368" stroke-width="2"/>
+<text x="700.0" y="937.0" class="t">Logs + JSON reports</text>
+<text x="700.0" y="957.0" class="s">outputs/</text>
+<rect x="990" y="918" width="320" height="48" rx="10" fill="#ffffff" stroke="#5f6368" stroke-width="2"/>
+<text x="1150.0" y="937.0" class="t">GUI views</text>
+<text x="1150.0" y="957.0" class="s">graphs, tables, findings</text>
+</svg>

@@ -22,6 +22,7 @@ nltk
 
 # ── GUI (required for run_gui.py) ─────────────────────────────────────────
 PyQt6
+matplotlib          # security and evaluation charts
 
 # ── dev ───────────────────────────────────────────────────────────────────
 pytest

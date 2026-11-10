@@ -145,8 +145,8 @@ Constraint solver ensures:
 
 ### Scoring
 
-- Per-function score: `100 - (critical*30 + high*15 + medium*5 + low*1)`, clamped 0-100
-- **Unsafe** = score < 80
+- Per-function score: `100 - (critical*40 + high*25 + medium*5 + low*1)`, clamped 0-100
+- **Unsafe** = score < 80 (any high or critical finding makes a function unsafe)
 - Module safety = % of functions with score >= 80
 
 ## GUI Workspaces

@@ -374,6 +374,25 @@ class TestLegacyIntegration(unittest.TestCase):
         self.assertIn("run_user_expression", report.function_scores)
         self.assertLess(report.module_safe_pct, 100.0)
 
+    def test_single_high_finding_makes_function_unsafe(self):
+        # Regression: with the old weights (high = 15) one SQL injection scored 85 and
+        # the GUI reported the module as 100 % safe.
+        src = (
+            "from flask import request\n"
+            "def find_user(conn, username):\n"
+            "    return conn.execute(\"SELECT * FROM u WHERE n = '\" + username + \"'\")\n"
+            "def page(conn):\n"
+            "    return find_user(conn, request.args.get('name'))\n"
+            "def helper():\n"
+            "    return 1\n"
+        )
+        mf = extract_features(parse_code(src), src, filepath="<sqli>")
+        report = run_security_analysis(mf, None, src)
+        self.assertEqual({i.severity for i in report.issues}, {"high"})
+        self.assertLess(report.function_scores["find_user"], 80.0)
+        self.assertEqual(report.function_scores["helper"], 100.0)
+        self.assertLess(report.module_safe_pct, 100.0)
+
     def test_context_security_issues_from_central_analyzer(self):
         path = os.path.join(os.path.dirname(__file__), "inputs", "test_security.py")
         src, tree, mf = self._features(path)

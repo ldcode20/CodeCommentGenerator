@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="845" viewBox="0 0 1400 845">
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+<path d="M0,0 L10,5 L0,10 z" fill="#444"/></marker>
+<style>
+text{font-family:'Segoe UI',Arial,Helvetica,sans-serif;text-anchor:middle;fill:#202124}
+.T{font-size:28px;font-weight:700}
+.st{font-size:15px;fill:#5f6368}
+.h{font-size:17px;font-weight:700;text-anchor:start}
+.t{font-size:16px;font-weight:600}
+.x{font-size:15px;font-weight:600;fill:#c5221f}
+.g{font-size:15px;font-weight:600;fill:#1e8e3e}
+.s{font-size:13px;fill:#5f6368}
+</style></defs>
+<rect width="1400" height="845" fill="#ffffff"/>
+<text x="700.0" y="44" class="T">Existing System — How Code Is Documented and Checked Today</text>
+<text x="700.0" y="70" class="st">Three separate, unconnected approaches. None of them grounds comments in the program structure or links them to code analysis.</text>
+<rect x="40" y="95" width="420" height="505" rx="16" fill="#fef7e0" stroke="#b06000" stroke-width="2"/>
+<text x="58" y="125" class="h" fill="#b06000">1  Manual / template documentation</text>
+<rect x="70" y="145" width="360" height="62" rx="10" fill="#ffffff" stroke="#b06000" stroke-width="2"/>
+<text x="250.0" y="181.0" class="t">Developer writes the code</text>
+<line x1="250.0" y1="207" x2="250.0" y2="241" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<rect x="70" y="245" width="360" height="62" rx="10" fill="#ffffff" stroke="#b06000" stroke-width="2"/>
+<text x="250.0" y="271.0" class="t">Writes comments by hand</text>
+<text x="250.0" y="291.0" class="s">or the IDE inserts an empty docstring stub</text>
+<line x1="250.0" y1="307" x2="250.0" y2="341" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<rect x="70" y="345" width="360" height="62" rx="10" fill="#ffffff" stroke="#b06000" stroke-width="2"/>
+<text x="250.0" y="371.0" class="t">Comments in the source</text>
+<text x="250.0" y="391.0" class="s">quality depends on the developer</text>
+<line x1="250.0" y1="407" x2="250.0" y2="441" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<rect x="70" y="445" width="360" height="50" rx="10" fill="#ffffff" stroke="#b06000" stroke-width="2"/>
+<text x="250.0" y="475.0" class="t">Comments</text>
+<rect x="70" y="515" width="360" height="60" rx="10" fill="#fff5f5" stroke="#c5221f" stroke-width="2" stroke-dasharray="6 4"/>
+<text x="250.0" y="540.0" class="x">✗ Often missing or out of date;</text>
+<text x="250.0" y="560.0" class="s">comments drift after code changes</text>
+<rect x="490" y="95" width="420" height="505" rx="16" fill="#e8f0fe" stroke="#3367d6" stroke-width="2"/>
+<text x="508" y="125" class="h" fill="#3367d6">2  Neural summarisation of raw code</text>
+<rect x="520" y="145" width="360" height="62" rx="10" fill="#ffffff" stroke="#3367d6" stroke-width="2"/>
+<text x="700.0" y="181.0" class="t">Source code as plain text</text>
+<line x1="700.0" y1="207" x2="700.0" y2="241" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<rect x="520" y="245" width="360" height="62" rx="10" fill="#ffffff" stroke="#3367d6" stroke-width="2"/>
+<text x="700.0" y="271.0" class="t">Tokenizer</text>
+<text x="700.0" y="291.0" class="s">code split into tokens — structure is lost</text>
+<line x1="700.0" y1="307" x2="700.0" y2="341" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<rect x="520" y="345" width="360" height="62" rx="10" fill="#ffffff" stroke="#3367d6" stroke-width="2"/>
+<text x="700.0" y="371.0" class="t">Large sequence-to-sequence model</text>
+<text x="700.0" y="391.0" class="s">trained on raw code tokens</text>
+<line x1="700.0" y1="407" x2="700.0" y2="441" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<rect x="520" y="445" width="360" height="50" rx="10" fill="#ffffff" stroke="#3367d6" stroke-width="2"/>
+<text x="700.0" y="475.0" class="t">Generated comment</text>
+<rect x="520" y="515" width="360" height="60" rx="10" fill="#fff5f5" stroke="#c5221f" stroke-width="2" stroke-dasharray="6 4"/>
+<text x="700.0" y="540.0" class="x">✗ Can invent parameters or types;</text>
+<text x="700.0" y="560.0" class="s">no confidence check; heavy GPU models</text>
+<rect x="940" y="95" width="420" height="505" rx="16" fill="#f1f3f4" stroke="#5f6368" stroke-width="2"/>
+<text x="958" y="125" class="h" fill="#5f6368">3  Separate static-analysis tools</text>
+<rect x="970" y="145" width="360" height="62" rx="10" fill="#ffffff" stroke="#5f6368" stroke-width="2"/>
+<text x="1150.0" y="181.0" class="t">Source code</text>
+<line x1="1150.0" y1="207" x2="1150.0" y2="241" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<rect x="970" y="245" width="360" height="62" rx="10" fill="#ffffff" stroke="#5f6368" stroke-width="2"/>
+<text x="1150.0" y="271.0" class="t">Linters / pattern scanners</text>
+<text x="1150.0" y="291.0" class="s">run as a separate tool</text>
+<line x1="1150.0" y1="307" x2="1150.0" y2="341" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<rect x="970" y="345" width="360" height="62" rx="10" fill="#ffffff" stroke="#5f6368" stroke-width="2"/>
+<text x="1150.0" y="371.0" class="t">Per-statement pattern matching</text>
+<text x="1150.0" y="391.0" class="s">no data flow from input to dangerous call</text>
+<line x1="1150.0" y1="407" x2="1150.0" y2="441" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<rect x="970" y="445" width="360" height="50" rx="10" fill="#ffffff" stroke="#5f6368" stroke-width="2"/>
+<text x="1150.0" y="475.0" class="t">List of warnings</text>
+<rect x="970" y="515" width="360" height="60" rx="10" fill="#fff5f5" stroke="#c5221f" stroke-width="2" stroke-dasharray="6 4"/>
+<text x="1150.0" y="540.0" class="x">✗ False alarms, no evidence trace;</text>
+<text x="1150.0" y="560.0" class="s">results kept apart from documentation</text>
+<rect x="40" y="625" width="1320" height="195" rx="16" fill="#e6f4ea" stroke="#1e8e3e" stroke-width="2"/>
+<text x="58" y="655" class="h" fill="#1e8e3e">Gaps in the existing system  →  how the proposed system addresses them</text>
+<rect x="70" y="673" width="300" height="56" rx="10" fill="#fff5f5" stroke="#c5221f" stroke-width="2"/>
+<text x="220.0" y="706.0" class="x">✗ Comments not grounded in code</text>
+<line x1="220.0" y1="729" x2="220.0" y2="749" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<rect x="70" y="753" width="300" height="50" rx="10" fill="#ffffff" stroke="#1e8e3e" stroke-width="2"/>
+<text x="220.0" y="783.0" class="g">✓ AST facts drive every comment</text>
+<rect x="390" y="673" width="300" height="56" rx="10" fill="#fff5f5" stroke="#c5221f" stroke-width="2"/>
+<text x="540.0" y="706.0" class="x">✗ Args / Returns / Raises guessed</text>
+<line x1="540.0" y1="729" x2="540.0" y2="749" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<rect x="390" y="753" width="300" height="50" rx="10" fill="#ffffff" stroke="#1e8e3e" stroke-width="2"/>
+<text x="540.0" y="783.0" class="g">✓ taken exactly from the AST</text>
+<rect x="710" y="673" width="300" height="56" rx="10" fill="#fff5f5" stroke="#c5221f" stroke-width="2"/>
+<text x="860.0" y="706.0" class="x">✗ No control over ML quality</text>
+<line x1="860.0" y1="729" x2="860.0" y2="749" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<rect x="710" y="753" width="300" height="50" rx="10" fill="#ffffff" stroke="#1e8e3e" stroke-width="2"/>
+<text x="860.0" y="783.0" class="g">✓ confidence-gated ML + rules</text>
+<rect x="1030" y="673" width="300" height="56" rx="10" fill="#fff5f5" stroke="#c5221f" stroke-width="2"/>
+<text x="1180.0" y="706.0" class="x">✗ Analysis separate, no evidence</text>
+<line x1="1180.0" y1="729" x2="1180.0" y2="749" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+<rect x="1030" y="753" width="300" height="50" rx="10" fill="#ffffff" stroke="#1e8e3e" stroke-width="2"/>
+<text x="1180.0" y="783.0" class="g">✓ one pipeline: IR, CFG, taint traces</text>
+</svg>

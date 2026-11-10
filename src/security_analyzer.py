@@ -53,9 +53,10 @@ class SecurityReport:
         self.by_severity[issue.severity] = self.by_severity.get(issue.severity, 0) + 1
 
     def compute_function_score(self, func_name: str, issues: List[SecurityIssue]) -> float:
-        # Severity-weighted as before; potential findings are not discounted, so an
-        # unverified critical issue still marks the function as unsafe.
-        weights = {"critical": 30, "high": 15, "medium": 5, "low": 1}
+        # Severity-weighted; potential findings are not discounted. Critical and
+        # high weights exceed the 20-point margin above the safe threshold (80),
+        # so a single high or critical finding always marks the function unsafe.
+        weights = {"critical": 40, "high": 25, "medium": 5, "low": 1}
         penalty = sum(weights.get(i.severity, 0) for i in issues)
         return max(0.0, min(100.0, 100.0 - penalty))
 

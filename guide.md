@@ -67,8 +67,8 @@ Always runs as part of the pipeline. Detects 12 security patterns with per-funct
 
 ### Scoring
 
-- Per-function: starts at 100, minus critical×30, high×15, medium×5, low×1. Clamped 0–100.
-- **Unsafe** = score < 80.
+- Per-function: starts at 100, minus critical×40, high×25, medium×5, low×1. Clamped 0–100.
+- **Unsafe** = score < 80, so any high or critical finding makes a function unsafe.
 - **Module safety** = % of functions scoring ≥ 80.
 
 ### How to view

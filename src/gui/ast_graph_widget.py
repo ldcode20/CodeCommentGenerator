@@ -58,11 +58,33 @@ class AstGraphWidget(QWidget):
         self._scale = 1.0
         self._dragging = False
         self._last_mouse = None
+        self._needs_fit = False
+        self._user_moved = False
         self.setMinimumSize(400, 300)
 
     def set_data(self, module_features, ast_tree=None):
         self._root = self._build_tree(module_features)
         self._layout_tree()
+        # Fit on first paint: the widget may be hidden (size unknown) right now
+        self._needs_fit = True
+        self._user_moved = False
+        self.update()
+
+    def fit_to_view(self):
+        """Zoom and centre so the whole tree is visible (double-click to reset)."""
+        if not self._all_nodes or self.width() <= 0 or self.height() <= 0:
+            return
+        left = min(n.x - n.w / 2 for n in self._all_nodes)
+        right = max(n.x + n.w / 2 for n in self._all_nodes)
+        top = min(n.y - n.h / 2 for n in self._all_nodes)
+        bottom = max(n.y + n.h / 2 for n in self._all_nodes)
+        margin = 20
+        scale = min(1.0, (self.width() - 2 * margin) / max(1.0, right - left),
+                    (self.height() - 2 * margin) / max(1.0, bottom - top))
+        self._scale = max(0.2, scale)
+        self._offset_x = (self.width() - (right - left) * self._scale) / 2 - left * self._scale
+        self._offset_y = margin - top * self._scale
+        self._needs_fit = False
         self.update()
 
     def _build_tree(self, mf) -> _ASTNode:
@@ -140,6 +162,8 @@ class AstGraphWidget(QWidget):
     def paintEvent(self, event):
         if not self._root:
             return
+        if self._needs_fit:
+            self.fit_to_view()
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.translate(self._offset_x, self._offset_y)
@@ -201,6 +225,7 @@ class AstGraphWidget(QWidget):
             dy = event.position().y() - self._last_mouse.y()
             self._offset_x += dx
             self._offset_y += dy
+            self._user_moved = True
             self._last_mouse = event.position()
             self.update()
             return
@@ -229,4 +254,14 @@ class AstGraphWidget(QWidget):
         factor = 1.15 if delta > 0 else 1 / 1.15
         self._scale *= factor
         self._scale = max(0.2, min(5.0, self._scale))
+        self._user_moved = True
         self.update()
+
+    def mouseDoubleClickEvent(self, event):
+        self._user_moved = False
+        self.fit_to_view()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._root and not self._user_moved:
+            self._needs_fit = True

@@ -681,12 +681,13 @@ CLI pipeline and the GUI. All issues come from `src.security.analyze_source`
 
 #### Scoring
 
-- **Critical** issues: -30 points
-- **High** issues: -15 points
+- **Critical** issues: -40 points
+- **High** issues: -25 points
 - **Medium** issues: -5 points
 - **Low** issues: -1 point
 - Score = `max(0, 100 - total_penalty)`
 - Module safe % = `count(scores >= 80) / count(all_scores) * 100`
+- A single high or critical finding therefore always makes a function unsafe (score ≤ 75)
 
 #### Public API
 
