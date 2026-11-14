@@ -33,6 +33,33 @@ EVAL_REPORT     = OUTPUT_DIR / "eval_report.json"
 DATASET_JSON    = OUTPUT_DIR / "ast_train_dataset.json"
 
 
+#: Display name used by the GUI window, the CLI banner and QSettings.
+APP_NAME = "Code Comment Generator"
+
+#: Where the GUI writes annotated files and pipeline logs by default.
+GUI_OUTPUT_DIR: pathlib.Path = PROJECT_ROOT / "out" / "annotated"
+
+
+def resolve_project_path(path=None, default: pathlib.Path = PROJECT_ROOT) -> pathlib.Path:
+    """
+    Resolve a user-supplied path against the project root.
+
+    ``None`` or an empty string gives ``default``; an absolute path is used
+    as-is; a relative path (``./out/annotated``) is resolved against the
+    project root, never the working directory, so the GUI writes to the same
+    place regardless of where it was launched from.
+    """
+    if path is None or not str(path).strip():
+        return default
+    p = pathlib.Path(str(path).strip()).expanduser()
+    return p if p.is_absolute() else (PROJECT_ROOT / p).resolve()
+
+
+def model_available(output_dir=None) -> bool:
+    """True when a trained checkpoint exists (same test ``load_ast_model`` uses)."""
+    return (ast_model_dir(output_dir) / "config.json").exists()
+
+
 def resolve_output_dir(output_dir=None) -> pathlib.Path:
     """
     Normalise a user-supplied output directory.

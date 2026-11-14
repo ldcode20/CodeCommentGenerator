@@ -82,7 +82,7 @@
 - **Control-Flow Graph (CFG)**: Constructs CFGs from IR for each function.
 - **Data-Flow Analysis (DFA)**: Implements reaching definitions (forward) and live variable analysis (backward) using worklist algorithms.
 - **Pattern Detection**: Identifies 7 code-quality patterns (unused variables, high complexity, dead blocks, missing returns, deep nesting, excessive calls, missing param loads).
-- **Security Analysis**: Interprocedural, per-context taint analysis over the real IR/CFG (SQL injection, command injection, XSS, path traversal, template injection, code injection, unsafe deserialization) plus AST rules (hardcoded secrets, weak hashes, bare except, mutable defaults, assert, insecure random, hardcoded IPs). Every finding carries CWE, severity, confidence, status and a source-to-sink evidence trace on original source lines. See [SECURITY_ANALYSIS.md](SECURITY_ANALYSIS.md).
+- **Security Analysis**: Interprocedural, per-context taint analysis over the real IR/CFG (SQL injection, command injection, XSS, path traversal, template injection, code injection, unsafe deserialization) plus AST rules (hardcoded secrets, weak hashes, bare except, mutable defaults, assert, insecure random, hardcoded IPs). Every finding carries CWE, severity, confidence, status and a source-to-sink evidence trace on original source lines. See [SECURITY_ANALYSIS.md](../SECURITY_ANALYSIS.md).
 - **ML Pipeline**: Builds datasets from CodeSearchNet + Python stdlib, fine-tunes T5-small on (AST feature text -> docstring) pairs, evaluates with BLEU-4/ROUGE-L/Exact Match.
 - **Neurosymbolic Fusion**: Gated combination of ML and symbolic generation with consistency validation.
 - **Docstring Safety**: Automatic sanitization prevents malformed docstrings (triple-quote escaping, raw string prefix removal).
@@ -646,7 +646,7 @@ between original and annotated line numbers.
 Adapter that keeps the `SecurityReport` / `SecurityIssue` interface used by the
 CLI pipeline and the GUI. All issues come from `src.security.analyze_source`
 (taint analysis + AST rules) run on the original source — see
-[SECURITY_ANALYSIS.md](SECURITY_ANALYSIS.md). Suppressed findings are kept in
+[SECURITY_ANALYSIS.md](../SECURITY_ANALYSIS.md). Suppressed findings are kept in
 `SecurityReport.suppressed` and excluded from scores.
 
 #### Data Classes
@@ -1567,7 +1567,7 @@ python -m src.main --train
 |---|---|---|---|
 | `filepath` | positional | required | Path to Python source file (not needed with `--train`) |
 | `--output`, `-o` | str | stdout | Write annotated source to FILE |
-| `--logs` | flag | off | Save pipeline logs (JSON + text) to `logs/` |
+| `--logs` | flag | off | Save pipeline logs (JSON + text) to `<output-dir>/logs/` |
 | `--show-features` | flag | off | Print extracted AST features as JSON |
 | `--show-context` | flag | off | Print semantic context graph as JSON |
 | `--ir` | flag | off | Print pretty-printed IR dump |
@@ -1666,7 +1666,7 @@ source_code
 | SEC015 | Server-side template injection | CWE-1336 | critical | taint |
 
 Sources, sinks, sanitizers, confidence derivation, evaluation results and
-limitations: [SECURITY_ANALYSIS.md](SECURITY_ANALYSIS.md).
+limitations: [SECURITY_ANALYSIS.md](../SECURITY_ANALYSIS.md).
 
 ---
 

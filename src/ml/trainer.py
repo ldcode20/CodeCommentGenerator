@@ -9,16 +9,18 @@ End-to-end pipeline:
   5. Save model + JSON reports
 
 Usage:
-    python3 -m src.main --train
-    python3 -m src.main --train --output-dir outputs/
-    python3 -m src.main --train --epochs 3 --batch-size 8
+    python -m src.main --train
+    python -m src.main --train --output-dir outputs/
+    python -m src.main --train --epochs 3 --batch-size 8
 """
 import json
 import pathlib
 import random
+from datetime import datetime
 from typing import List, Optional
 
 from ..config import resolve_output_dir
+from .ast_comment_model import TrainingCancelled
 from .ast_dataset_builder import (
     build_full_dataset, save_dataset, ASTTrainPair, build_stdlib_dataset,
     load_dataset_from_json,
@@ -93,6 +95,8 @@ def train_and_evaluate(
     grad_accum_steps: int = 1,
     lr: float = 2e-4,
     verbose: bool = True,
+    progress_callback=None,
+    should_stop=None,
 ) -> dict:
     """
     Full AST-feature NLP training pipeline.
@@ -118,6 +122,15 @@ def train_and_evaluate(
         grad_accum_steps:      Gradient accumulation steps.
         lr:                    Learning rate.
         verbose:               Print progress.
+        progress_callback:     Optional ``fn(stage, done, total, message)``;
+                               ``stage`` is ``"dataset"``, ``"train"``,
+                               ``"evaluate"`` or ``"save"``.  ``total`` is 0
+                               for stages with no measurable progress.
+        should_stop:           Optional ``fn() -> bool`` polled between stages
+                               and on every training batch.  Returning True
+                               raises :class:`TrainingCancelled`; nothing is
+                               saved, so an existing checkpoint is untouched.
+                               (The dataset build itself cannot be interrupted.)
 
     Returns:
         dict with ``training_report`` and ``eval_report``.
@@ -130,6 +143,16 @@ def train_and_evaluate(
     def _log(msg):
         if verbose:
             print(f"  [trainer] {msg}")
+
+    def _progress(stage, done=0, total=0, message=""):
+        if progress_callback is not None:
+            progress_callback(stage, done, total, message)
+
+    def _check_cancel():
+        if should_stop is not None and should_stop():
+            raise TrainingCancelled("Training cancelled.")
+
+    _progress("dataset", message="Building dataset …")
 
     # ── 1. Build dataset ──────────────────────────────────────────────────────
     if dataset_json and pathlib.Path(dataset_json).exists():
@@ -161,6 +184,7 @@ def train_and_evaluate(
 
     train_pairs, test_pairs = _split(pairs, test_ratio=test_ratio)
     _log(f"Split: train={len(train_pairs)}  test={len(test_pairs)}")
+    _check_cancel()
 
     # ── 2. Fine-tune ASTCommentModel ──────────────────────────────────────────
     training_meta = {"model": "ASTCommentModel", "error": "not attempted"}
@@ -177,7 +201,12 @@ def train_and_evaluate(
             grad_accum_steps=grad_accum_steps,
             lr=lr,
             verbose=verbose,
+            progress_callback=lambda done, total, msg: _progress("train", done, total, msg),
+            should_stop=should_stop,
         )
+    except TrainingCancelled:
+        _log("Training cancelled — existing checkpoint left untouched.")
+        raise
     except ImportError as exc:
         _log(f"[skip] transformers/torch not installed: {exc}")
         training_meta["error"] = str(exc)
@@ -189,6 +218,8 @@ def train_and_evaluate(
     # ── 3. Evaluate ───────────────────────────────────────────────────────────
     eval_report_dict = None
     if ast_model is not None and test_pairs:
+        _check_cancel()
+        _progress("evaluate", message="Evaluating on the held-out split …")
         _log(f"Evaluating on {min(len(test_pairs), 200)} test samples …")
         eval_report_dict = _evaluate_model(ast_model, test_pairs)
         _log(
@@ -199,11 +230,14 @@ def train_and_evaluate(
 
     # ── 4. Save model ─────────────────────────────────────────────────────────
     if ast_model is not None:
+        _check_cancel()
+        _progress("save", message="Saving model …")
         ast_model.save(str(model_dir))
         _log(f"Model saved → {model_dir}/")
 
     # ── 5. Write report JSONs ─────────────────────────────────────────────────
     training_report = {
+        "trained_at":     datetime.now().isoformat(timespec="seconds"),
         "dataset_total":  len(pairs),
         "train_size":     len(train_pairs),
         "test_size":      len(test_pairs),

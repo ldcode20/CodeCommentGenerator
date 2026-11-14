@@ -2,7 +2,7 @@ import os
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QTextEdit, QSplitter, QTreeWidget, QTreeWidgetItem)
 from PyQt6.QtCore import Qt
-from src.config import PROJECT_ROOT, OUTPUT_DIR
+from src.config import GUI_OUTPUT_DIR, OUTPUT_DIR
 from src.gui.syntax_highlighter import JsonSyntaxHighlighter
 
 class LogsWorkspace(QWidget):
@@ -11,11 +11,18 @@ class LogsWorkspace(QWidget):
         # Absolute, so the viewer finds the files regardless of where the
         # app was launched from.
         self.output_dirs = {
-            "Pipeline Logs": str(PROJECT_ROOT / "out" / "annotated" / "logs"),
-            "Model Training Outputs": str(OUTPUT_DIR),
-            "Model Training Logs": str(OUTPUT_DIR / "logs"),
+            "Pipeline Logs (GUI)": str(GUI_OUTPUT_DIR / "logs"),
+            "Pipeline Logs (CLI --logs)": str(OUTPUT_DIR / "logs"),
+            "Training Reports": str(OUTPUT_DIR),
         }
         self.setup_ui()
+
+    def set_pipeline_dir(self, output_dir: str):
+        """Follow the Generator's output folder so its logs always show up here."""
+        logs_dir = os.path.join(output_dir, "logs")
+        if self.output_dirs.get("Pipeline Logs (GUI)") != logs_dir:
+            self.output_dirs["Pipeline Logs (GUI)"] = logs_dir
+            self.load_log_list()
         
     def setup_ui(self):
         layout = QVBoxLayout(self)
@@ -23,7 +30,7 @@ class LogsWorkspace(QWidget):
         
         header_layout = QHBoxLayout()
         title = QLabel("Logs & Reports Viewer")
-        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #1a1a2e;")
+        title.setProperty("class", "PageTitle")
         
         self.btn_load_logs = QPushButton("Refresh Files")
         self.btn_load_logs.setProperty("class", "SecondaryButton")
@@ -57,12 +64,13 @@ class LogsWorkspace(QWidget):
         self.file_tree.clear()
         
         for category, search_dir in self.output_dirs.items():
-            if not os.path.exists(search_dir):
+            if not os.path.isdir(search_dir):
                 continue
-                
+
             cat_item = QTreeWidgetItem([category])
-            cat_item.setExpanded(True)
+            cat_item.setToolTip(0, search_dir)
             self.file_tree.addTopLevelItem(cat_item)
+            cat_item.setExpanded(True)
             
             files = []
             for f in os.listdir(search_dir):

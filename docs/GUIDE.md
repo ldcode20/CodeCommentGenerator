@@ -158,14 +158,14 @@ Fine-tunes T5-small on structured AST features paired with docstring sentences.
 ### Quick Training (smoke test)
 
 ```bash
-python3 -m src.main --train --output-dir outputs \
+python -m src.main --train --output-dir outputs \
   --codesearchnet-max 20 --max-stdlib-files 10 --epochs 1 --batch-size 2
 ```
 
 ### Medium Quality (RTX 4050)
 
 ```bash
-python3 -m src.main --train --output-dir outputs \
+python -m src.main --train --output-dir outputs \
   --codesearchnet-max 8000 --max-stdlib-files 600 \
   --epochs 3 --batch-size 8
 ```
@@ -185,16 +185,16 @@ ML Training workspace → click **Start / Retrain Models**. Progress appears in 
 ## 7. CLI Reference
 
 ```bash
-python3 -m src.main <filepath>              # Rule-based generation
-python3 -m src.main <filepath> --ml         # ML generation
-python3 -m src.main <filepath> --neurosymbolic  # Neurosymbolic generation
-python3 -m src.main <filepath> -o out.py    # Write annotated output to file
-python3 -m src.main <filepath> --logs        # Save pipeline logs
-python3 -m src.main <filepath> --show-features   # Print AST features JSON
-python3 -m src.main <filepath> --show-context    # Print context graph JSON
-python3 -m src.main <filepath> --ir              # Print IR dump
-python3 -m src.main <filepath> --analysis       # Print pattern analysis
-python3 -m src.main --train                       # Train ML model
+python -m src.main <filepath>              # Rule-based generation
+python -m src.main <filepath> --ml         # ML generation
+python -m src.main <filepath> --neurosymbolic  # Neurosymbolic generation
+python -m src.main <filepath> -o out.py    # Write annotated output to file
+python -m src.main <filepath> --logs        # Save pipeline logs
+python -m src.main <filepath> --show-features   # Print AST features JSON
+python -m src.main <filepath> --show-context    # Print context graph JSON
+python -m src.main <filepath> --ir              # Print IR dump
+python -m src.main <filepath> --analysis       # Print pattern analysis
+python -m src.main --train                       # Train ML model
 ```
 
 ### Training Flags

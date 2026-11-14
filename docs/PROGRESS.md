@@ -25,7 +25,7 @@ proposed system is complete; the security part goes beyond the original proposal
 | 11 | Outputs: annotated file, JSON reports, GUI views | ✅ Done | A2, B3, B13 | — |
 | — | Evaluation (BLEU-4, ROUGE-L, exact match; security P/R/F1/FPR) | ✅ Done | B10, A9; OWASP held-out F1 0.90–0.92, real-world held-out F1 0.69 | Larger, independently reviewed real-world security benchmark |
 | — | Automated tests | ✅ Done | 229 passed (A10) | — |
-| — | Documentation | ✅ Done | README, DOCUMENTATION.md, SECURITY_ANALYSIS.md, METHODOLOGY.md, existing and proposed architecture diagrams, these screenshots | — |
+| — | Documentation | ✅ Done | README, docs/DOCUMENTATION.md, SECURITY_ANALYSIS.md, METHODOLOGY.md, existing and proposed architecture diagrams, these screenshots | — |
 
 ## Issues found while taking the screenshots — fixed on 10 November 2026
 

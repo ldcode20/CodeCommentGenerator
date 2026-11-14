@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "code-comment-generator"
+version = "1.0.0"
+description = "Python comment/docstring generation from the AST (rule-based, ML and neurosymbolic engines) with a taint-based security analyzer"
+readme = "README.md"
+license = { file = "LICENSE" }
+# PyTorch publishes no wheels for 3.14 yet — see README "Setup".
+requires-python = ">=3.11,<3.14"
+# The rule-based engine and the security analyzer use only the standard library.
+dependencies = []
+
+[project.optional-dependencies]
+# --train / --ml / --neurosymbolic
+ml = [
+    "numpy>=1.26",
+    "torch>=2.4",
+    "transformers>=4.44,<5",
+    "sentencepiece",
+    "datasets>=2.19",
+    "nltk",
+]
+# run_gui.py / code-comment-gen-gui
+gui = [
+    "PyQt6",
+    "matplotlib",
+]
+dev = [
+    "pytest",
+]
+all = [
+    "code-comment-generator[ml,gui,dev]",
+]
+
+[project.scripts]
+code-comment-gen = "src.main:main"
+code-comment-security = "src.security.__main__:main"
+
+[project.gui-scripts]
+code-comment-gen-gui = "src.gui.app:main"
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

@@ -62,6 +62,35 @@ from that one location.
 
 ---
 
+### Optional: install as a package
+
+```bash
+pip install -e .            # rule-based engine + security analyzer (standard library only)
+pip install -e .[gui]       # + desktop app
+pip install -e .[all]       # + ML training/inference and pytest
+```
+
+This adds the commands `code-comment-gen`, `code-comment-security` and
+`code-comment-gen-gui`. On Windows the examples below work the same with
+`.venv/Scripts/python.exe` in place of `python`.
+
+---
+
+## Desktop app
+
+```bash
+python run_gui.py
+```
+
+Five pages: **Generator** (open or drop a file, pick an engine, view the annotated output
+with added lines highlighted, copy or save it), **Security** (scan the editor code or a
+whole folder without generating anything, read the source-to-sink evidence, double-click a
+finding to jump to its line), **ML Training** (presets, progress, cancel), **Insights**
+(AST, call graph, IR, pattern report, evaluation charts) and **Logs**. Full guide:
+[docs/GUI.md](docs/GUI.md).
+
+---
+
 ## Current ML Architecture
 
 The active ML pipeline is centered on `src/ml/`:
@@ -79,13 +108,13 @@ The active ML pipeline is centered on `src/ml/`:
 ### 1) Train AST+NLP model
 
 ```bash
-python3 -m src.main --train
+python -m src.main --train
 ```
 
 Useful tuning flags:
 
 ```bash
-python3 -m src.main --train \
+python -m src.main --train \
   --epochs 1 \
   --batch-size 2 \
   --codesearchnet-max 20 \
@@ -95,13 +124,13 @@ python3 -m src.main --train \
 ### 2) Rule-based generation
 
 ```bash
-python3 -m src.main tests/inputs/complex_sample.py
+python -m src.main tests/inputs/complex_sample.py
 ```
 
 ### 3) AST+NLP ML generation
 
 ```bash
-python3 -m src.main tests/inputs/complex_sample.py --ml
+python -m src.main tests/inputs/complex_sample.py --ml
 ```
 
 `--ml` is strict AST+NLP mode. If no trained model exists, execution fails with a clear train-first message.
@@ -109,7 +138,7 @@ python3 -m src.main tests/inputs/complex_sample.py --ml
 Recommended medium-quality run for RTX 4050:
 
 ```bash
-python3 -m src.main --train \
+python -m src.main --train \
   --codesearchnet-max 8000 \
   --max-stdlib-files 600 \
   --epochs 3 \
@@ -199,6 +228,27 @@ limitations: [SECURITY_ANALYSIS.md](SECURITY_ANALYSIS.md).
 
 ---
 
+## Tests
+
+```bash
+python -m pytest -q
+```
+
+Includes headless GUI smoke tests (`tests/test_gui_smoke.py`) that need PyQt6 but no
+trained model. A GitHub Actions workflow (`.github/workflows/tests.yml`) runs the suite on
+Python 3.11 and 3.12.
+
+## More documentation
+
+- [docs/GUI.md](docs/GUI.md) — desktop app guide
+- [docs/GUIDE.md](docs/GUIDE.md) — feature guide and CLI reference
+- [docs/WALKTHROUGH.md](docs/WALKTHROUGH.md) — architecture walkthrough
+- [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md) — full technical documentation
+- [docs/METHODOLOGY.md](docs/METHODOLOGY.md), [docs/PROGRESS.md](docs/PROGRESS.md)
+- [SECURITY_ANALYSIS.md](SECURITY_ANALYSIS.md), [benchmarks/README.md](benchmarks/README.md)
+
+---
+
 ## Troubleshooting
 
 ### "No trained AST+NLP model found" / exit code 2
@@ -243,9 +293,10 @@ loading-script dataset. Training still proceeds on the Python standard library
 crawl — a smaller and narrower corpus, so expect weaker metrics. Check your
 network/proxy, or pass `--no-codesearchnet` to make the stdlib-only path explicit.
 
-### GUI: training finishes but ML mode still says "not trained"
+### GUI: ML-Based and Neurosymbolic are greyed out
 
-Fixed. The training tab used to write to `outputs/gui_models` while the generator
+No checkpoint was found in `outputs/model/ast_model/`. Train one from the ML Training
+page (start with the *Quick check* preset). An older GUI version wrote to `outputs/gui_models` while the generator
 tab read from `outputs`. Both now resolve through `src/config.py`. If you
 previously trained from the GUI, the stale checkpoint is in
 `outputs/gui_models/model/ast_model/` — move it to `outputs/model/ast_model/` or

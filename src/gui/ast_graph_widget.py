@@ -1,35 +1,36 @@
 import math
 from PyQt6.QtWidgets import QWidget, QToolTip
 from PyQt6.QtCore import Qt, QRectF, QPointF
+from src.gui import theme
 from PyQt6.QtGui import (
     QPainter, QPen, QBrush, QColor, QFont, QPainterPath,
 )
 
 
 _NODE_COLORS = {
-    "Module": QColor("#6b7280"),
-    "Import": QColor("#ca8a04"),
-    "Class": QColor("#16a34a"),
-    "Function": QColor("#2563eb"),
-    "AsyncFunction": QColor("#7c3aed"),
+    "Module": QColor(theme.GRAY),
+    "Import": QColor(theme.WARNING),
+    "Class": QColor(theme.SUCCESS),
+    "Function": QColor(theme.ACCENT),
+    "AsyncFunction": QColor(theme.PURPLE),
     "Param": QColor("#0891b2"),
-    "Loop": QColor("#ea580c"),
-    "Conditional": QColor("#ea580c"),
-    "Call": QColor("#7c3aed"),
-    "Return": QColor("#dc2626"),
+    "Loop": QColor(theme.ORANGE),
+    "Conditional": QColor(theme.ORANGE),
+    "Call": QColor(theme.PURPLE),
+    "Return": QColor(theme.DANGER),
     "Decorator": QColor("#db2777"),
 }
 
 _EDGE_COLORS = {
-    "parent": QColor("#9ca3af"),
-    "call": QColor("#7c3aed"),
+    "parent": QColor(theme.TEXT_FAINT),
+    "call": QColor(theme.PURPLE),
 }
 
 _COMPLEXITY_COLORS = {
-    "simple": QColor("#16a34a"),
-    "moderate": QColor("#ca8a04"),
-    "complex": QColor("#ea580c"),
-    "very_complex": QColor("#dc2626"),
+    "simple": QColor(theme.SUCCESS),
+    "moderate": QColor(theme.WARNING),
+    "complex": QColor(theme.ORANGE),
+    "very_complex": QColor(theme.DANGER),
 }
 
 
@@ -188,19 +189,19 @@ class AstGraphWidget(QWidget):
 
     def _draw_nodes(self, painter):
         for node in self._all_nodes:
-            color = _NODE_COLORS.get(node.node_type, QColor("#6b7280"))
+            color = _NODE_COLORS.get(node.node_type, QColor(theme.GRAY))
             is_hovered = node is self._hovered
             rect = QRectF(node.x - node.w / 2, node.y - node.h / 2, node.w, node.h)
 
             if is_hovered:
-                painter.setPen(QPen(QColor("#1a1a2e"), 2.5))
+                painter.setPen(QPen(QColor(theme.TEXT), 2.5))
             else:
                 painter.setPen(QPen(color.darker(120), 1.5))
 
             painter.setBrush(QBrush(color))
             painter.drawRoundedRect(rect, 6, 6)
 
-            painter.setPen(QPen(QColor("#ffffff")))
+            painter.setPen(QPen(QColor(theme.SURFACE)))
             font = QFont("Inter", 9, QFont.Weight.Bold)
             painter.setFont(font)
             text = node.label

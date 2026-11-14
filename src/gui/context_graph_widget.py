@@ -2,16 +2,17 @@ import math
 import random
 from PyQt6.QtWidgets import QWidget, QToolTip
 from PyQt6.QtCore import Qt, QRectF, QPointF, QTimer
+from src.gui import theme
 from PyQt6.QtGui import (
     QPainter, QPen, QBrush, QColor, QFont, QPainterPath,
     QLinearGradient, QPalette,
 )
 
 _COMPLEXITY_COLORS = {
-    "simple": QColor("#16a34a"),
-    "moderate": QColor("#ca8a04"),
-    "complex": QColor("#ea580c"),
-    "very_complex": QColor("#dc2626"),
+    "simple": QColor(theme.SUCCESS),
+    "moderate": QColor(theme.WARNING),
+    "complex": QColor(theme.ORANGE),
+    "very_complex": QColor(theme.DANGER),
 }
 
 _COMPLEXITY_LABELS = {
@@ -21,8 +22,8 @@ _COMPLEXITY_LABELS = {
     "very_complex": "Very Complex (CC > 10)",
 }
 
-_SEC_BORDER_COLOR = QColor("#dc2626")
-_EDGE_BASE_COLOR = QColor("#7c3aed")
+_SEC_BORDER_COLOR = QColor(theme.DANGER)
+_EDGE_BASE_COLOR = QColor(theme.PURPLE)
 _DIM_FACTOR = 180
 
 
@@ -273,8 +274,8 @@ class ContextGraphWidget(QWidget):
             return
 
         grad = QLinearGradient(start_x, start_y, end_x, end_y)
-        src_color = _COMPLEXITY_COLORS.get(src.complexity, QColor("#6b7280"))
-        dst_color = _COMPLEXITY_COLORS.get(dst.complexity, QColor("#6b7280"))
+        src_color = _COMPLEXITY_COLORS.get(src.complexity, QColor(theme.GRAY))
+        dst_color = _COMPLEXITY_COLORS.get(dst.complexity, QColor(theme.GRAY))
         grad.setColorAt(0.0, src_color)
         grad.setColorAt(1.0, dst_color)
 
@@ -321,7 +322,7 @@ class ContextGraphWidget(QWidget):
         is_selected = node is self._selected
         dimmed = self._selected and not is_neighbor
 
-        color = _COMPLEXITY_COLORS.get(node.complexity, QColor("#6b7280"))
+        color = _COMPLEXITY_COLORS.get(node.complexity, QColor(theme.GRAY))
         if dimmed:
             color = QColor(color.red(), color.green(), color.blue(), 60)
 
@@ -336,7 +337,7 @@ class ContextGraphWidget(QWidget):
         if node.security_issues and not dimmed:
             border_pen = QPen(_SEC_BORDER_COLOR, 2.5)
         elif is_selected:
-            border_pen = QPen(QColor("#1e40af"), 2.5)
+            border_pen = QPen(QColor(theme.ACCENT_PRESSED), 2.5)
         elif is_hovered:
             border_pen = QPen(QColor("#1e1e2e"), 2.0)
         else:
@@ -356,7 +357,7 @@ class ContextGraphWidget(QWidget):
         painter.setBrush(QBrush(bg))
         painter.drawRoundedRect(rect, 8, 8)
 
-        text_color = QColor("#ffffff") if not dimmed else QColor(255, 255, 255, 80)
+        text_color = QColor(theme.SURFACE) if not dimmed else QColor(255, 255, 255, 80)
         painter.setPen(QPen(text_color))
         font = QFont("Inter", 8, QFont.Weight.Bold)
         painter.setFont(font)
@@ -372,7 +373,7 @@ class ContextGraphWidget(QWidget):
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QBrush(_SEC_BORDER_COLOR))
             painter.drawEllipse(QPointF(badge_x, badge_y), badge_r, badge_r)
-            painter.setPen(QPen(QColor("#ffffff")))
+            painter.setPen(QPen(QColor(theme.SURFACE)))
             painter.setFont(QFont("Inter", 6, QFont.Weight.Bold))
             painter.drawText(QRectF(badge_x - badge_r, badge_y - badge_r,
                                      badge_r * 2, badge_r * 2),
@@ -380,7 +381,7 @@ class ContextGraphWidget(QWidget):
 
         if is_selected:
             sel_rect = QRectF(rect.x() - 3, rect.y() - 3, rect.width() + 6, rect.height() + 6)
-            painter.setPen(QPen(QColor("#1e40af"), 1.5, Qt.PenStyle.DashLine))
+            painter.setPen(QPen(QColor(theme.ACCENT_PRESSED), 1.5, Qt.PenStyle.DashLine))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(sel_rect, 10, 10)
 
@@ -391,7 +392,7 @@ class ContextGraphWidget(QWidget):
         lx = self.width() - legend_w - margin
         ly = self.height() - legend_h - margin
 
-        painter.setPen(QPen(QColor("#9ca3af"), 1))
+        painter.setPen(QPen(QColor(theme.TEXT_FAINT), 1))
         painter.setBrush(QBrush(QColor("#f8fafc")))
         painter.drawRoundedRect(QRectF(lx, ly, legend_w, legend_h), 6, 6)
 
@@ -466,7 +467,7 @@ class ContextGraphWidget(QWidget):
                 if hovered.incoming:
                     details.append(f"← Called by: {', '.join(n.label for n in hovered.incoming[:4])}")
                 if hovered.security_issues:
-                    details.append(f"<font color='#dc2626'>Security: {len(hovered.security_issues)} issue(s)</font>")
+                    details.append(f"<font color=theme.DANGER>Security: {len(hovered.security_issues)} issue(s)</font>")
                     for si in hovered.security_issues[:3]:
                         details.append(f"&nbsp;&nbsp;• {si}")
                 QToolTip.showText(event.globalPosition().toPoint(),

@@ -73,23 +73,23 @@ outputs/
 
 ```bash
 # Train AST+NLP model
-python3 -m src.main --train --output-dir outputs
+python -m src.main --train --output-dir outputs
 
 # Fast smoke-training configuration
-python3 -m src.main --train --output-dir outputs \
+python -m src.main --train --output-dir outputs \
   --codesearchnet-max 20 --max-stdlib-files 10 --epochs 1 --batch-size 2
 
 # Rule-based generation
-python3 -m src.main tests/inputs/complex_sample.py
+python -m src.main tests/inputs/complex_sample.py
 
 # AST+NLP ML generation
-python3 -m src.main tests/inputs/complex_sample.py --ml
+python -m src.main tests/inputs/complex_sample.py --ml
 
 # Neurosymbolic generation (confidence-gated fusion)
-python3 -m src.main tests/inputs/complex_sample.py --neurosymbolic
+python -m src.main tests/inputs/complex_sample.py --neurosymbolic
 
 # Targeted tests
-python3 -m pytest tests/ -q
+python -m pytest tests/ -q
 ```
 
 ## Neurosymbolic Engine Design
@@ -179,7 +179,7 @@ Constraint solver ensures:
 ## Medium Quality Preset (RTX 4050)
 
 ```bash
-python3 -m src.main --train \
+python -m src.main --train \
   --codesearchnet-max 8000 \
   --max-stdlib-files 600 \
   --epochs 3 \

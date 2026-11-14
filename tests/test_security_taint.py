@@ -393,6 +393,26 @@ class TestLegacyIntegration(unittest.TestCase):
         self.assertEqual(report.function_scores["helper"], 100.0)
         self.assertLess(report.module_safe_pct, 100.0)
 
+    def test_same_method_name_in_two_classes_scored_separately(self):
+        # Regression: scores were keyed by bare function name, so A.save and
+        # B.save shared one entry and the vulnerable one could be hidden.
+        src = (
+            "from flask import request\n"
+            "class A:\n"
+            "    def save(self, conn):\n"
+            "        name = request.args.get('name')\n"
+            "        return conn.execute(\"SELECT * FROM u WHERE n = '\" + name + \"'\")\n"
+            "class B:\n"
+            "    def save(self, conn):\n"
+            "        return 1\n"
+        )
+        mf = extract_features(parse_code(src), src, filepath="<methods>")
+        report = run_security_analysis(mf, None, src)
+        self.assertEqual(set(report.function_scores), {"A.save", "B.save"})
+        self.assertLess(report.function_scores["A.save"], 80.0)
+        self.assertEqual(report.function_scores["B.save"], 100.0)
+        self.assertEqual(report.module_safe_pct, 50.0)
+
     def test_context_security_issues_from_central_analyzer(self):
         path = os.path.join(os.path.dirname(__file__), "inputs", "test_security.py")
         src, tree, mf = self._features(path)

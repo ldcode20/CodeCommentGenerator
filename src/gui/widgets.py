@@ -2,6 +2,7 @@ import math
 from PyQt6.QtWidgets import QPushButton, QFrame, QLabel, QHBoxLayout, QGraphicsOpacityEffect
 from PyQt6.QtCore import Qt, QTimer, QPropertyAnimation, QRect, QSize, pyqtProperty
 from PyQt6.QtGui import QPainter, QPen, QColor, QFont, QConicalGradient
+from src.gui import theme
 
 
 class SpinningButton(QPushButton):
@@ -131,7 +132,7 @@ class ToastWidget(QFrame):
             icon = "\u2717"
         else:
             bg = "#eff6ff"
-            fg = "#1e40af"
+            fg = theme.ACCENT_PRESSED
             icon = "\u2139"
 
         self._inner.setStyleSheet(

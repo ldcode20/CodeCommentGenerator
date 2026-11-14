@@ -71,6 +71,10 @@ MAX_TARGET_LEN = 64    # tokens for the generated docstring
 DATALOADER_WORKERS = 0 if os.name == "nt" else 2
 
 
+class TrainingCancelled(Exception):
+    """Raised when a ``should_stop`` hook asks a training run to stop."""
+
+
 # ── Torch Dataset ─────────────────────────────────────────────────────────────
 
 class _ASTDataset(TorchDataset if _TRANSFORMERS_OK else object):
@@ -167,9 +171,16 @@ class ASTCommentModel:
         grad_accum_steps: int = 1,
         seed: int = 42,
         verbose: bool = True,
+        progress_callback=None,
+        should_stop=None,
     ) -> dict:
         """
         Fine-tune T5 on (AST feature text, docstring) pairs.
+
+        ``progress_callback(done_steps, total_steps, message)`` is called about
+        once per percent of training; ``should_stop()`` is polled every batch
+        and raises :class:`TrainingCancelled` when it returns True (nothing is
+        saved, so an existing checkpoint is left as it was).
 
         Args:
             pairs:       List of ASTTrainPair from ast_dataset_builder.
@@ -238,12 +249,25 @@ class ASTCommentModel:
             print(f"  [ast_model] Fine-tuning on {len(train_data)} pairs "
                   f"(val={len(val_data)}) for {epochs} epoch(s) on {self._device} …")
 
+        total_batches = max(1, len(train_dl) * epochs)
+        report_every  = max(1, total_batches // 100)
+        done_batches  = 0
+
         try:
             for epoch in range(epochs):
                 t0 = time.time()
                 epoch_loss = 0.0
                 optimizer.zero_grad()
                 for step_idx, batch in enumerate(train_dl, start=1):
+                    if should_stop is not None and should_stop():
+                        raise TrainingCancelled(
+                            f"Training cancelled during epoch {epoch + 1}/{epochs}.")
+                    done_batches += 1
+                    if progress_callback is not None and (
+                            done_batches % report_every == 0 or done_batches == total_batches):
+                        progress_callback(
+                            done_batches, total_batches,
+                            f"Epoch {epoch + 1}/{epochs} — batch {step_idx}/{len(train_dl)}")
                     batch = {k: v.to(self._device) for k, v in batch.items()}
                     with torch.amp.autocast("cuda", dtype=amp_dtype,
                                             enabled=use_amp):

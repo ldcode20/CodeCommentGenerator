@@ -1,6 +1,7 @@
 import re
 from PyQt6.QtGui import QSyntaxHighlighter, QTextCharFormat, QColor, QFont
 from PyQt6.QtCore import Qt
+from src.gui import theme
 
 class PythonSyntaxHighlighter(QSyntaxHighlighter):
     def __init__(self, document):
@@ -9,7 +10,7 @@ class PythonSyntaxHighlighter(QSyntaxHighlighter):
         self.highlightingRules = []
 
         keywordFormat = QTextCharFormat()
-        keywordFormat.setForeground(QColor("#7c3aed"))
+        keywordFormat.setForeground(QColor(theme.PURPLE))
         keywordFormat.setFontWeight(QFont.Weight.Bold)
         keywords = [
             '\\bdef\\b', '\\bclass\\b', '\\bimport\\b', '\\bfrom\\b',
@@ -25,7 +26,7 @@ class PythonSyntaxHighlighter(QSyntaxHighlighter):
             self.highlightingRules.append((re.compile(pattern), keywordFormat))
 
         builtinFormat = QTextCharFormat()
-        builtinFormat.setForeground(QColor("#0d9488"))
+        builtinFormat.setForeground(QColor(theme.TEAL))
         builtins = [
             '\\bprint\\b', '\\blen\\b', '\\brange\\b', '\\bstr\\b',
             '\\bint\\b', '\\bfloat\\b', '\\bdict\\b', '\\bset\\b', '\\btype\\b',
@@ -35,29 +36,29 @@ class PythonSyntaxHighlighter(QSyntaxHighlighter):
             self.highlightingRules.append((re.compile(pattern), builtinFormat))
 
         decoratorFormat = QTextCharFormat()
-        decoratorFormat.setForeground(QColor("#2563eb"))
+        decoratorFormat.setForeground(QColor(theme.ACCENT))
         self.highlightingRules.append((re.compile(r'@[^\n]*'), decoratorFormat))
 
         stringFormat = QTextCharFormat()
-        stringFormat.setForeground(QColor("#16a34a"))
+        stringFormat.setForeground(QColor(theme.SUCCESS))
         self.highlightingRules.append((re.compile(r'".*"'), stringFormat))
         self.highlightingRules.append((re.compile(r"'.*'"), stringFormat))
 
         functionFormat = QTextCharFormat()
-        functionFormat.setForeground(QColor("#2563eb"))
+        functionFormat.setForeground(QColor(theme.ACCENT))
         self.highlightingRules.append((re.compile(r'\b[A-Za-z0-9_]+(?=\()'), functionFormat))
 
         numberFormat = QTextCharFormat()
-        numberFormat.setForeground(QColor("#ea580c"))
+        numberFormat.setForeground(QColor(theme.ORANGE))
         self.highlightingRules.append((re.compile(r'\b[0-9]+(\.[0-9]+)?\b'), numberFormat))
 
         self.commentFormat = QTextCharFormat()
-        self.commentFormat.setForeground(QColor("#9ca3af"))
+        self.commentFormat.setForeground(QColor(theme.TEXT_FAINT))
         self.commentFormat.setFontItalic(True)
         self.highlightingRules.append((re.compile(r'#[^\n]*'), self.commentFormat))
 
         self.multiLineStringFormat = QTextCharFormat()
-        self.multiLineStringFormat.setForeground(QColor("#16a34a"))
+        self.multiLineStringFormat.setForeground(QColor(theme.SUCCESS))
         self.multiLineStringFormat.setFontItalic(True)
 
     def highlightBlock(self, text):
@@ -96,19 +97,19 @@ class JsonSyntaxHighlighter(QSyntaxHighlighter):
         self.highlightingRules = []
 
         keyFormat = QTextCharFormat()
-        keyFormat.setForeground(QColor("#2563eb"))
+        keyFormat.setForeground(QColor(theme.ACCENT))
         self.highlightingRules.append((re.compile(r'"[^"]*"\s*:'), keyFormat))
 
         stringFormat = QTextCharFormat()
-        stringFormat.setForeground(QColor("#16a34a"))
+        stringFormat.setForeground(QColor(theme.SUCCESS))
         self.highlightingRules.append((re.compile(r':\s*"[^"]*"'), stringFormat))
 
         numberFormat = QTextCharFormat()
-        numberFormat.setForeground(QColor("#ea580c"))
+        numberFormat.setForeground(QColor(theme.ORANGE))
         self.highlightingRules.append((re.compile(r'\b[0-9]+(\.[0-9]+)?\b'), numberFormat))
 
         boolFormat = QTextCharFormat()
-        boolFormat.setForeground(QColor("#7c3aed"))
+        boolFormat.setForeground(QColor(theme.PURPLE))
         self.highlightingRules.append((re.compile(r'\b(true|false|null)\b'), boolFormat))
         
     def highlightBlock(self, text):

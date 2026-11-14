@@ -129,8 +129,18 @@ def run_security_analysis(
     report = SecurityReport(findings=result.findings, by_status=result.by_status(),
                             parse_error=result.parse_error)
 
-    per_func: Dict[str, List[SecurityIssue]] = {ff.name: [] for ff in module_features.functions}
-    spans = [(ff.name, ff.lineno, ff.lineno + ff.body_lines) for ff in module_features.functions]
+    # Score keys: bare name for module-level functions, ``Class.method`` for
+    # methods, so two classes that both define ``save()`` are scored separately.
+    # Any name that is still not unique (nested or redefined functions) gets
+    # its line number appended instead of silently sharing one score.
+    per_func: Dict[str, List[SecurityIssue]] = {}
+    spans = []
+    for ff in module_features.functions:
+        key = f"{ff.parent_class}.{ff.name}" if ff.parent_class else ff.name
+        if key in per_func:
+            key = f"{key}@L{ff.lineno}"
+        per_func[key] = []
+        spans.append((key, ff.lineno, ff.lineno + ff.body_lines))
     for f in result.findings:
         issue = _to_issue(f)
         if f.status == "suppressed":
@@ -148,3 +158,22 @@ def run_security_analysis(
         report.function_scores[name] = report.compute_function_score(name, issues)
     report.module_safe_pct = report.compute_module_safe_pct(report.function_scores)
     return report
+
+
+def run_security_analysis_on_source(source_code: str, filepath: str = "<editor>") -> SecurityReport:
+    """
+    Security analysis of a source string, with no comment generation and no ML.
+
+    Used by the GUI "Scan" action.  A file that does not parse returns a report
+    whose ``parse_error`` is set instead of raising.
+    """
+    from .ast_extractor import extract_features
+    from .error_handler import ParserError, format_error
+    from .parser_module import parse_code
+
+    try:
+        tree = parse_code(source_code)
+    except ParserError as exc:
+        return SecurityReport(parse_error=format_error(exc))
+    module_features = extract_features(tree, source_code, filepath=filepath)
+    return run_security_analysis(module_features, None, source_code)

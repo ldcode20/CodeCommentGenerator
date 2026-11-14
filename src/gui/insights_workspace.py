@@ -4,27 +4,25 @@ from PyQt6.QtWidgets import (
     QStackedWidget
 )
 from PyQt6.QtGui import QColor, QBrush, QFont
-from PyQt6.QtCore import Qt
-from src.gui.syntax_highlighter import PythonSyntaxHighlighter
+from PyQt6.QtCore import Qt, pyqtSignal
+from src.config import EVAL_REPORT, TRAINING_REPORT
+from src.gui import theme
 from src.gui.ast_graph_widget import AstGraphWidget
 from src.gui.context_graph_widget import ContextGraphWidget
 from src.gui.eval_graph_widget import EvalGraphWidget
 
-_EMPTY_STATE_STYLE = (
-    "color: #9ca3af; font-size: 14px; padding: 40px; "
-    "background: transparent; border: none;"
-)
-
-
 def _make_empty_state(message):
     lbl = QLabel(message)
     lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    lbl.setStyleSheet(_EMPTY_STATE_STYLE)
+    lbl.setProperty("class", "EmptyState")
     lbl.setWordWrap(True)
     return lbl
 
 
 class InsightsWorkspace(QWidget):
+    #: 1-based line of the input code the user wants to see.
+    jumpRequested = pyqtSignal(int)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._populated = False
@@ -35,7 +33,7 @@ class InsightsWorkspace(QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
 
         title = QLabel("Insights & Code Visualizer")
-        title.setStyleSheet("font-size: 18px; font-weight: bold; margin-bottom: 12px; color: #1a1a2e;")
+        title.setProperty("class", "PageTitle")
         layout.addWidget(title)
 
         self.tabs = QTabWidget()
@@ -53,7 +51,7 @@ class InsightsWorkspace(QWidget):
         self.tabs.addTab(self._stack_ast, "AST Features")
 
         self.ast_graph = AstGraphWidget()
-        self.ast_graph.setStyleSheet("background-color: #ffffff;")
+        self.ast_graph.setStyleSheet(f"background-color: {theme.SURFACE};")
         self._empty_ast_graph = _make_empty_state(
             "Run code generation to visualize the AST graph.\n\n"
             "An interactive tree graph will display nodes and their relationships."
@@ -76,7 +74,7 @@ class InsightsWorkspace(QWidget):
         self.tabs.addTab(self._stack_ctx, "Context Graph")
 
         self.call_graph = ContextGraphWidget()
-        self.call_graph.setStyleSheet("background-color: #ffffff;")
+        self.call_graph.setStyleSheet(f"background-color: {theme.SURFACE};")
         self._empty_call = _make_empty_state(
             "Run code generation to visualize the call graph.\n\n"
             "An interactive force-directed graph will display function call relationships."
@@ -99,8 +97,10 @@ class InsightsWorkspace(QWidget):
         self.tabs.addTab(self._stack_ir, "IR Dump")
 
         self.table_analysis = QTableWidget()
-        self.table_analysis.setColumnCount(4)
-        self.table_analysis.setHorizontalHeaderLabels(["Severity", "Pattern", "Function", "Message"])
+        self.table_analysis.setColumnCount(5)
+        self.table_analysis.setHorizontalHeaderLabels(["Severity", "Pattern", "Function", "Line", "Message"])
+        self.table_analysis.setToolTip("Double-click a finding to open its line in the Generator.")
+        self.table_analysis.cellDoubleClicked.connect(self._on_analysis_double_click)
         self.table_analysis.horizontalHeader().setStretchLastSection(True)
         self.table_analysis.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table_analysis.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -162,11 +162,11 @@ class InsightsWorkspace(QWidget):
                 item = QTreeWidgetItem(self.tree_ctx, [fc.name, fc.complexity_label])
 
                 if fc.complexity_label == "simple":
-                    item.setForeground(1, QBrush(QColor("#16a34a")))
+                    item.setForeground(1, QBrush(QColor(theme.SUCCESS)))
                 elif fc.complexity_label == "moderate":
-                    item.setForeground(1, QBrush(QColor("#ca8a04")))
+                    item.setForeground(1, QBrush(QColor(theme.WARNING)))
                 elif fc.complexity_label in ("complex", "very_complex"):
-                    item.setForeground(1, QBrush(QColor("#dc2626")))
+                    item.setForeground(1, QBrush(QColor(theme.DANGER)))
 
                 if fc.calls_internal:
                     QTreeWidgetItem(item, ["Internal Calls", ", ".join(fc.calls_internal)])
@@ -176,10 +176,10 @@ class InsightsWorkspace(QWidget):
                 security_issues = getattr(fc, 'security_issues', [])
                 if security_issues:
                     sec_item = QTreeWidgetItem(item, ["Security Warnings", f"{len(security_issues)} found"])
-                    sec_item.setForeground(0, QBrush(QColor("#dc2626")))
+                    sec_item.setForeground(0, QBrush(QColor(theme.DANGER)))
                     for sec in security_issues:
                         s_i = QTreeWidgetItem(sec_item, ["Warning", sec])
-                        s_i.setForeground(1, QBrush(QColor("#dc2626")))
+                        s_i.setForeground(1, QBrush(QColor(theme.DANGER)))
             self.tree_ctx.expandAll()
 
             self.call_graph.set_data(cg)
@@ -190,27 +190,39 @@ class InsightsWorkspace(QWidget):
             self.tab_ir.setPlainText(pretty_print_ir(ir_module))
 
         self.table_analysis.setRowCount(0)
+        if analysis_report is not None and not analysis_report.findings:
+            # A clean run is a result, not "nothing has been run yet".
+            self._empty_analysis.setText("No patterns detected in the last run.")
+            self._stack_analysis.setCurrentIndex(0)
         if analysis_report and analysis_report.findings:
             self._stack_analysis.setCurrentIndex(1)
             self.table_analysis.setRowCount(len(analysis_report.findings))
             for i, finding in enumerate(analysis_report.findings):
                 sev_item = QTableWidgetItem(finding.severity.upper())
                 if finding.severity == "warning":
-                    sev_item.setForeground(QBrush(QColor("#ca8a04")))
+                    sev_item.setForeground(QBrush(QColor(theme.WARNING)))
                 elif finding.severity == "error":
-                    sev_item.setForeground(QBrush(QColor("#dc2626")))
+                    sev_item.setForeground(QBrush(QColor(theme.DANGER)))
                 else:
-                    sev_item.setForeground(QBrush(QColor("#2563eb")))
+                    sev_item.setForeground(QBrush(QColor(theme.ACCENT)))
 
                 self.table_analysis.setItem(i, 0, sev_item)
                 self.table_analysis.setItem(i, 1, QTableWidgetItem(finding.pattern_id))
                 self.table_analysis.setItem(i, 2, QTableWidgetItem(finding.function_name))
-                self.table_analysis.setItem(i, 3, QTableWidgetItem(finding.message))
+                line = getattr(finding, "lineno", 0) or 0
+                self.table_analysis.setItem(i, 3, QTableWidgetItem(str(line) if line else ""))
+                self.table_analysis.setItem(i, 4, QTableWidgetItem(finding.message))
         self.table_analysis.resizeColumnsToContents()
         self.table_analysis.horizontalHeader().setStretchLastSection(True)
 
-        import json, os
-        from src.config import EVAL_REPORT, TRAINING_REPORT
-        eval_path = str(EVAL_REPORT)
-        train_path = str(TRAINING_REPORT)
-        self.eval_graph.set_data(eval_json_path=eval_path, training_json_path=train_path)
+        self.refresh_evaluation()
+
+    def refresh_evaluation(self):
+        """Reload the Evaluation tab from the saved training / eval reports."""
+        self.eval_graph.set_data(eval_json_path=str(EVAL_REPORT),
+                                 training_json_path=str(TRAINING_REPORT))
+
+    def _on_analysis_double_click(self, row, _col):
+        item = self.table_analysis.item(row, 3)
+        if item is not None and item.text().isdigit():
+            self.jumpRequested.emit(int(item.text()))

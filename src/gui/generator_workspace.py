@@ -1,100 +1,137 @@
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-                             QPushButton, QSplitter, QTextEdit, QLineEdit, QRadioButton,
-                             QFileDialog, QButtonGroup, QMessageBox, QProgressBar,
-                             QGraphicsOpacityEffect)
-from PyQt6.QtCore import Qt, pyqtSignal, QThread, QTimer, QPropertyAnimation
-from PyQt6.QtGui import QFont, QColor, QTextCharFormat, QTextCursor, QSyntaxHighlighter
-import sys
+"""
+Generator workspace — source in, annotated source out.
+"""
+import difflib
 import os
+import sys
+import tempfile
 import traceback
+from typing import List, Optional
 
-from src.main import run_pipeline
-from src.logger import PipelineLogger
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import QGuiApplication
+from PyQt6.QtWidgets import (QButtonGroup, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
+                             QMessageBox, QProgressBar, QPushButton, QRadioButton,
+                             QSplitter, QVBoxLayout, QWidget)
+
+from src.config import GUI_OUTPUT_DIR, OUTPUT_DIR, model_available, resolve_project_path
+from src.error_handler import ParserError, format_error
+from src.gui import theme
+from src.gui.code_editor import CodeEditor
 from src.gui.syntax_highlighter import PythonSyntaxHighlighter
-from src.config import OUTPUT_DIR
-from src.ml.trainer import load_ast_model
+from src.logger import PipelineLogger
 
-_SPINNER_FRAMES = ["\u28f7", "\u28ef", "\u28df", "\u28dd", "\u28d9", "\u28d1",
-                   "\u28c1", "\u2881", "\u2882", "\u2884", "\u2888", "\u2890",
-                   "\u28a0", "\u28e0", "\u28f0", "\u28f8"]
+UNTITLED = "untitled.py"
+ENGINES = ("rule_based", "neurosymbolic", "ml")
+_NO_MODEL_HINT = "No trained model yet — train one in the ML Training tab."
+
+
+def added_lines(original: str, annotated: str) -> List[int]:
+    """1-based line numbers of ``annotated`` that are not in ``original``."""
+    a, b = original.splitlines(), annotated.splitlines()
+    out: List[int] = []
+    for tag, _i1, _i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if tag in ("insert", "replace"):
+            out.extend(range(j1 + 1, j2 + 1))
+    return out
 
 
 class GeneratorWorker(QThread):
-    finished = pyqtSignal(str, str, object)
-    status = pyqtSignal(str)
+    """Runs one pipeline pass off the UI thread."""
+    progress = pyqtSignal(str)
+    succeeded = pyqtSignal(object)      # dict: annotated, result, output_file
+    failed = pyqtSignal(object)         # dict: message, detail, line, column
+    modelLoaded = pyqtSignal(object)    # the loaded model, for reuse by later runs
 
-    def __init__(self, code_text, engine, output_dir):
+    def __init__(self, code_text: str, engine: str, output_dir: str,
+                 source_path: Optional[str], ast_model=None):
         super().__init__()
         self.code_text = code_text
         self.engine = engine
         self.output_dir = output_dir
+        self.source_path = source_path
+        self.ast_model = ast_model
 
     def run(self):
         try:
-            self.status.emit("Setting up temporary files...")
+            # Imported here so opening the window does not pay for torch.
+            from src.main import run_pipeline
+
+            name = os.path.basename(self.source_path) if self.source_path else UNTITLED
+            stem = os.path.splitext(name)[0]
             os.makedirs(self.output_dir, exist_ok=True)
-            tmp_in = os.path.join(self.output_dir, "gui_tmp_in.py")
-            with open(tmp_in, 'w', encoding='utf-8') as f:
-                f.write(self.code_text)
 
-            logger = PipelineLogger(input_file=tmp_in)
+            ast_model = self.ast_model
+            if self.engine in ("ml", "neurosymbolic") and ast_model is None:
+                self.progress.emit("Loading AST+NLP model…")
+                from src.ml.trainer import load_ast_model
+                ast_model = load_ast_model(output_dir=str(OUTPUT_DIR))
+                if ast_model is None:
+                    raise RuntimeError(
+                        "No trained AST+NLP model found. Train one in the ML Training tab, "
+                        "or run: python -m src.main --train --quick")
+                self.modelLoaded.emit(ast_model)
 
-            ast_model = None
-            if self.engine in ("ml", "neurosymbolic"):
-                self.status.emit("Loading AST+NLP ML model...")
-                try:
-                    ast_model = load_ast_model(output_dir=str(OUTPUT_DIR))
-                    if ast_model is None:
-                        raise RuntimeError(
-                            "No trained AST+NLP model found. "
-                            "Train first from ML Training tab or run: python3 -m src.main --train"
-                        )
-                except Exception as e:
-                    raise RuntimeError(f"Failed to start ML mode: {e}") from e
+            self.progress.emit("Running pipeline…")
+            # The editor text may differ from the file on disk, so the pipeline
+            # reads a private copy — named like the original so reports and
+            # logs show the real file name rather than a temp name.
+            logger = PipelineLogger(input_file=self.source_path or name)
+            with tempfile.TemporaryDirectory(prefix="ccg_") as tmp:
+                tmp_in = os.path.join(tmp, name)
+                with open(tmp_in, "w", encoding="utf-8") as fh:
+                    fh.write(self.code_text)
+                result = run_pipeline(
+                    tmp_in, logger,
+                    ast_model=ast_model if self.engine != "rule_based" else None,
+                    strict_ml=self.engine in ("ml", "neurosymbolic"),
+                    engine=self.engine,
+                )
 
-            self.status.emit("Running pipeline...")
-            annotated, comments, mf, cg, attach_result, ir_module, analysis_report, security_report = \
-                run_pipeline(tmp_in, logger, ast_model=ast_model,
-                             strict_ml=(self.engine in ("ml", "neurosymbolic")),
-                             engine=self.engine)
+            # Findings were located in the private copy; report the real file.
+            shown_path = self.source_path or name
+            for finding in result.security_report.findings:
+                finding.file = shown_path
 
-            out_file = os.path.join(self.output_dir, "gui_annotated.py")
-            with open(out_file, 'w', encoding='utf-8') as f:
-                f.write(annotated)
-
-            self.status.emit("Saving logs...")
+            self.progress.emit("Saving output and logs…")
+            out_file = os.path.join(self.output_dir, f"{stem}_annotated.py")
+            with open(out_file, "w", encoding="utf-8") as fh:
+                fh.write(result.annotated_source)
             logger.set_output_file(out_file)
             logger.save(os.path.join(self.output_dir, "logs"))
 
-            results_dict = {
-                "mf": mf,
-                "cg": cg,
-                "ir": ir_module,
-                "analysis": analysis_report,
-                "security_report": security_report,
-            }
-            self.finished.emit("Success", annotated, results_dict)
-        except Exception as e:
-            err = traceback.format_exc()
-            self.finished.emit(f"Error: {e}\n\n{err}", "", None)
+            self.succeeded.emit({"annotated": result.annotated_source, "result": result,
+                                 "output_file": out_file})
+        except ParserError as exc:
+            self.failed.emit({"message": format_error(exc), "detail": "",
+                              "line": exc.line, "column": exc.column})
+        except Exception as exc:  # shown to the user, never swallowed
+            self.failed.emit({"message": f"{type(exc).__name__}: {exc}",
+                              "detail": traceback.format_exc(), "line": None, "column": None})
 
 
 class GeneratorWorkspace(QWidget):
     generationStarted = pyqtSignal()
-    generationFinished = pyqtSignal(str, str, object)
+    #: (ok, payload) — payload is the results dict on success, the error dict otherwise.
+    generationFinished = pyqtSignal(bool, object)
+    #: Absolute output directory, emitted whenever it changes.
+    outputDirChanged = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.current_filepath = None
-        self._is_generating = False
-        self._step_spinner_frame = 0
-        self._step_spinner_timer = QTimer(self)
-        self._step_spinner_timer.setInterval(80)
-        self._step_spinner_timer.timeout.connect(self._tick_step_spinner)
-        self._current_step_line = None
-        self._completed_steps = []
+        self.current_filepath: Optional[str] = None
+        self.last_output_file: Optional[str] = None
+        self.worker: Optional[GeneratorWorker] = None
+        self._ast_model = None
+        self._last_dir = ""
+        self._steps: List[str] = []
+        self._source_for_output = ""
         self.setup_ui()
+        self.refresh_engine_availability()
+        if self.btn_neuro.isEnabled():
+            self.btn_neuro.setChecked(True)
 
+    # ── UI ────────────────────────────────────────────────────────────────
     def setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -103,48 +140,42 @@ class GeneratorWorkspace(QWidget):
         header = QWidget()
         header.setObjectName("WorkspaceHeader")
         header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(16, 12, 16, 12)
+        header_layout.setContentsMargins(16, 10, 16, 10)
+        header_layout.setSpacing(12)
 
-        engine_group = QWidget()
-        engine_layout = QHBoxLayout(engine_group)
-        engine_layout.setContentsMargins(4, 4, 4, 4)
-        engine_layout.setSpacing(8)
+        engine_lbl = QLabel("Engine:")
+        engine_lbl.setProperty("class", "Caption")
+        header_layout.addWidget(engine_lbl)
 
         self.btn_rule = QRadioButton("Rule-Based")
         self.btn_neuro = QRadioButton("Neurosymbolic")
         self.btn_ml = QRadioButton("ML-Based")
-        self.btn_neuro.setChecked(True)
-
+        self.btn_rule.setToolTip("Deterministic, AST-driven. Needs no trained model.")
         self.engine_btn_group = QButtonGroup(self)
-        self.engine_btn_group.addButton(self.btn_rule, 1)
-        self.engine_btn_group.addButton(self.btn_neuro, 2)
-        self.engine_btn_group.addButton(self.btn_ml, 3)
+        for idx, btn in enumerate((self.btn_rule, self.btn_neuro, self.btn_ml)):
+            self.engine_btn_group.addButton(btn, idx)
+            header_layout.addWidget(btn)
+        self.btn_rule.setChecked(True)
 
-        engine_layout.addWidget(self.btn_rule)
-        engine_layout.addWidget(self.btn_neuro)
-        engine_layout.addWidget(self.btn_ml)
-
-        header_layout.addWidget(engine_group)
         header_layout.addStretch()
 
-        self.unsafe_label = QLabel("0% unsafe")
-        self.unsafe_label.setStyleSheet(
-            "color: #16a34a; font-weight: bold; font-size: 13px; "
-            "padding: 4px 10px; background: rgba(22,163,74,0.08); border-radius: 6px;"
-        )
+        self.unsafe_label = QLabel()
         header_layout.addWidget(self.unsafe_label)
+        self.update_unsafe_pct(None, analysed=False)
 
-        dir_layout = QHBoxLayout()
-        dir_label = QLabel("Output Dir:")
-        dir_label.setStyleSheet("color: #495057; font-weight: 500; font-size: 14px;")
-
+        dir_label = QLabel("Output folder:")
+        dir_label.setProperty("class", "Caption")
         self.out_dir_input = QLineEdit("./out/annotated")
         self.out_dir_input.setProperty("class", "DirInput")
-        self.out_dir_input.setMinimumWidth(250)
-
-        dir_layout.addWidget(dir_label)
-        dir_layout.addWidget(self.out_dir_input)
-        header_layout.addLayout(dir_layout)
+        self.out_dir_input.setMinimumWidth(220)
+        self.out_dir_input.setToolTip("Relative paths are resolved against the project folder.")
+        self.out_dir_input.editingFinished.connect(self._emit_output_dir)
+        self.btn_browse = QPushButton("Browse…")
+        self.btn_browse.setProperty("class", "SecondaryButton")
+        self.btn_browse.clicked.connect(self.browse_output_dir)
+        header_layout.addWidget(dir_label)
+        header_layout.addWidget(self.out_dir_input)
+        header_layout.addWidget(self.btn_browse)
 
         layout.addWidget(header)
 
@@ -157,6 +188,7 @@ class GeneratorWorkspace(QWidget):
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
 
+        # input pane
         input_pane = QWidget()
         input_pane.setObjectName("PaneContainer")
         input_layout = QVBoxLayout(input_pane)
@@ -167,22 +199,27 @@ class GeneratorWorkspace(QWidget):
         input_header.setObjectName("EditorPaneHeader")
         ih_layout = QHBoxLayout(input_header)
         ih_layout.setContentsMargins(16, 8, 16, 8)
-        ih_title = QLabel("Input Python Code")
-        self.btn_pick_file = QPushButton("Pick File")
+        self.ih_title = QLabel("Input")
+        self.btn_pick_file = QPushButton("Open File…")
         self.btn_pick_file.setProperty("class", "SecondaryButton")
-        self.btn_pick_file.clicked.connect(self.pick_file)
-        ih_layout.addWidget(ih_title)
+        self.btn_pick_file.setToolTip("Open a Python file (Ctrl+O). You can also drop a file on the editor.")
+        self.btn_pick_file.clicked.connect(lambda: self.open_file())
+        ih_layout.addWidget(self.ih_title)
         ih_layout.addStretch()
         ih_layout.addWidget(self.btn_pick_file)
 
-        self.input_editor = QTextEdit()
+        self.input_editor = CodeEditor()
         self.input_editor.setProperty("class", "CodeEditor")
-        self.input_editor.setPlaceholderText("Paste Python code here, or Pick File...")
+        self.input_editor.setPlaceholderText(
+            "Paste Python code here, drop a .py file, or use Open File…")
         self.input_highlighter = PythonSyntaxHighlighter(self.input_editor.document())
+        self.input_editor.fileDropped.connect(self.load_file)
+        self.input_editor.textChanged.connect(self.input_editor.clear_marker)
 
         input_layout.addWidget(input_header)
         input_layout.addWidget(self.input_editor)
 
+        # output pane
         output_pane = QWidget()
         output_pane.setObjectName("PaneContainer")
         output_layout = QVBoxLayout(output_pane)
@@ -193,180 +230,300 @@ class GeneratorWorkspace(QWidget):
         output_header.setObjectName("EditorPaneHeader")
         oh_layout = QHBoxLayout(output_header)
         oh_layout.setContentsMargins(16, 8, 16, 8)
+        oh_layout.setSpacing(8)
         self.oh_title = QLabel("Annotated Output")
+        self.btn_diff = QPushButton("Highlight added lines")
+        self.btn_diff.setProperty("class", "SecondaryButton")
+        self.btn_diff.setCheckable(True)
+        self.btn_diff.setChecked(True)
+        self.btn_diff.toggled.connect(self._apply_diff)
+        self.btn_copy = QPushButton("Copy")
+        self.btn_copy.setProperty("class", "SecondaryButton")
+        self.btn_copy.clicked.connect(self.copy_output)
+        self.btn_save = QPushButton("Save As…")
+        self.btn_save.setProperty("class", "SecondaryButton")
+        self.btn_save.setToolTip("Save the annotated code to a file of your choice (Ctrl+S)")
+        self.btn_save.clicked.connect(self.save_output)
         oh_layout.addWidget(self.oh_title)
         oh_layout.addStretch()
+        for btn in (self.btn_diff, self.btn_copy, self.btn_save):
+            oh_layout.addWidget(btn)
 
-        self.output_editor = QTextEdit()
+        self.error_banner = QLabel()
+        self.error_banner.setWordWrap(True)
+        self.error_banner.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.error_banner.setStyleSheet(
+            f"background: {theme.rgba(theme.DANGER, 0.08)}; color: {theme.DANGER}; "
+            f"padding: 10px 16px; font-size: 13px; font-weight: 600; "
+            f"border-bottom: 1px solid {theme.rgba(theme.DANGER, 0.3)};")
+        self.error_banner.hide()
+
+        self.output_editor = CodeEditor(read_only=True)
         self.output_editor.setProperty("class", "DiffEditor")
-        self.output_editor.setReadOnly(True)
-        self.output_editor.setPlaceholderText("Annotated code will appear here...")
+        self.output_editor.setPlaceholderText("Annotated code will appear here…")
         self.output_highlighter = PythonSyntaxHighlighter(self.output_editor.document())
 
         output_layout.addWidget(output_header)
+        output_layout.addWidget(self.error_banner)
         output_layout.addWidget(self.output_editor)
 
         self.splitter.addWidget(input_pane)
         self.splitter.addWidget(output_pane)
-
-        self.splitter.setStyleSheet("QSplitter::handle { background-color: #e0e4e8; }")
-
         layout.addWidget(self.splitter, stretch=1)
 
-    def pick_file(self):
-        filepath, _ = QFileDialog.getOpenFileName(
-            self, "Select Python File", "", "Python Files (*.py);;All Files (*)"
-        )
-        if filepath:
-            self.current_filepath = filepath
-            with open(filepath, 'r', encoding='utf-8') as f:
-                self.input_editor.setPlainText(f.read())
+        self._set_output_actions_enabled(False)
 
-    def trigger_generation(self):
-        code = self.input_editor.toPlainText().strip()
-        if not code:
-            QMessageBox.warning(self, "No Code", "Please pick a file or paste some code.")
-            return
+    # ── engine selection ──────────────────────────────────────────────────
+    def selected_engine(self) -> str:
+        return ENGINES[max(0, self.engine_btn_group.checkedId())]
 
-        if self.btn_neuro.isChecked():
-            engine = "neurosymbolic"
-        elif self.btn_ml.isChecked():
-            engine = "ml"
+    def set_engine(self, engine: str):
+        if engine in ENGINES:
+            btn = self.engine_btn_group.button(ENGINES.index(engine))
+            if btn.isEnabled():
+                btn.setChecked(True)
+
+    def refresh_engine_availability(self):
+        """Enable the model-backed engines only when a checkpoint exists."""
+        available = model_available()
+        for btn, tip in ((self.btn_neuro, "Confidence-gated fusion of the ML summary and symbolic rules."),
+                         (self.btn_ml, "Summary generated by the trained AST+NLP model.")):
+            btn.setEnabled(available)
+            btn.setToolTip(tip if available else _NO_MODEL_HINT)
+        if not available and not self.btn_rule.isChecked():
+            self.btn_rule.setChecked(True)
+
+    def invalidate_model(self):
+        """Drop the cached model (call after retraining) and re-check availability."""
+        self._ast_model = None
+        self.refresh_engine_availability()
+
+    # ── files ─────────────────────────────────────────────────────────────
+    def output_dir(self) -> str:
+        return str(resolve_project_path(self.out_dir_input.text(), GUI_OUTPUT_DIR))
+
+    def _emit_output_dir(self):
+        self.outputDirChanged.emit(self.output_dir())
+
+    def browse_output_dir(self):
+        chosen = QFileDialog.getExistingDirectory(self, "Choose output folder", self.output_dir())
+        if chosen:
+            self.out_dir_input.setText(chosen)
+            self._emit_output_dir()
+
+    def open_file(self, path: Optional[str] = None):
+        if not path:
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Open Python file", self._last_dir, "Python Files (*.py);;All Files (*)")
+        if path:
+            self.load_file(path)
+
+    def load_file(self, path: str) -> bool:
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                text = fh.read()
+        except (OSError, UnicodeDecodeError) as exc:
+            QMessageBox.warning(self, "Cannot open file", f"{path}\n\n{exc}")
+            return False
+        self.current_filepath = os.path.abspath(path)
+        self._last_dir = os.path.dirname(self.current_filepath)
+        self.input_editor.setPlainText(text)
+        self._update_input_title()
+        return True
+
+    def _update_input_title(self):
+        if self.current_filepath:
+            self.ih_title.setText(f"Input — {os.path.basename(self.current_filepath)}")
+            self.ih_title.setToolTip(self.current_filepath)
         else:
-            engine = "rule_based"
+            self.ih_title.setText("Input")
+            self.ih_title.setToolTip("")
 
-        self._is_generating = True
-        self._completed_steps = []
-        self._current_step_line = None
+    def source_name(self) -> str:
+        return os.path.basename(self.current_filepath) if self.current_filepath else UNTITLED
+
+    def current_code(self) -> str:
+        return self.input_editor.toPlainText()
+
+    def goto_line(self, line: int, tint=theme.JUMP_LINE_TINT) -> bool:
+        ok = self.input_editor.goto_line(line, tint)
+        self.input_editor.setFocus()
+        return ok
+
+    # ── output actions ────────────────────────────────────────────────────
+    def _set_output_actions_enabled(self, enabled: bool):
+        for btn in (self.btn_diff, self.btn_copy, self.btn_save):
+            btn.setEnabled(enabled)
+
+    def has_output(self) -> bool:
+        return bool(self.output_editor.toPlainText())
+
+    def copy_output(self):
+        if self.has_output():
+            QGuiApplication.clipboard().setText(self.output_editor.toPlainText())
+            self.btn_copy.setText("Copied")
+            QTimer.singleShot(1500, lambda: self.btn_copy.setText("Copy"))
+
+    def save_output(self) -> Optional[str]:
+        """Save the annotated code where the user chooses. Returns the path, or None."""
+        if not self.has_output():
+            return None
+        stem = os.path.splitext(self.source_name())[0]
+        start = os.path.join(self._last_dir or self.output_dir(), f"{stem}_annotated.py")
+        path, _ = QFileDialog.getSaveFileName(self, "Save annotated code", start,
+                                              "Python Files (*.py);;All Files (*)")
+        if not path:
+            return None
+        if self.current_filepath and os.path.abspath(path) == self.current_filepath:
+            answer = QMessageBox.question(
+                self, "Overwrite the input file?",
+                f"{path}\n\nThis is the file you opened. Replace it with the annotated version?")
+            if answer != QMessageBox.StandardButton.Yes:
+                return None
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(self.output_editor.toPlainText())
+        except OSError as exc:
+            QMessageBox.warning(self, "Cannot save file", f"{path}\n\n{exc}")
+            return None
+        return path
+
+    def _apply_diff(self, _checked=None):
+        if self.btn_diff.isChecked() and self.has_output():
+            self.output_editor.set_line_tints(
+                added_lines(self._source_for_output, self.output_editor.toPlainText()))
+        else:
+            self.output_editor.clear_line_tints()
+
+    # ── generation ────────────────────────────────────────────────────────
+    def is_busy(self) -> bool:
+        return self.worker is not None and self.worker.isRunning()
+
+    def wait_for_worker(self, msecs: int = 15000) -> bool:
+        return self.worker is None or self.worker.wait(msecs)
+
+    def trigger_generation(self) -> bool:
+        """
+        Start a run.  Returns False (and starts nothing) when there is no code
+        or a run is already in progress, so the caller never shows a busy state
+        that nothing will clear.
+        """
+        if self.is_busy():
+            return False
+        code = self.current_code()
+        if not code.strip():
+            QMessageBox.warning(self, "No code", "Open a file or paste some Python code first.")
+            return False
+
+        self._steps = []
+        self._source_for_output = code
+        self.error_banner.hide()
+        self.input_editor.clear_marker()
+        self.output_editor.setPlainText("")
+        self._set_output_actions_enabled(False)
         self.progress_bar.show()
-        self.output_editor.clear()
-        self.output_editor.setPlaceholderText("")
+        self.oh_title.setText("Annotated Output — generating…")
+        self._emit_output_dir()
 
-        self.oh_title.setText("Annotated Output \u2014 Generating...")
-
-        self.worker = GeneratorWorker(code, engine, self.out_dir_input.text().strip())
-        self.worker.status.connect(self._on_worker_status)
-        self.worker.finished.connect(self.on_generation_finished)
+        self.worker = GeneratorWorker(code, self.selected_engine(), self.output_dir(),
+                                      self.current_filepath, self._ast_model)
+        self.worker.progress.connect(self._on_worker_progress)
+        self.worker.modelLoaded.connect(self._on_model_loaded)
+        self.worker.succeeded.connect(self._on_succeeded)
+        self.worker.failed.connect(self._on_failed)
         self.worker.start()
-
         self.generationStarted.emit()
-        self._step_spinner_timer.start()
+        return True
 
-    def _on_worker_status(self, msg):
-        if self._current_step_line is not None:
-            self._completed_steps.append(self._current_step_line)
-            self._rewrite_progress()
+    def _on_model_loaded(self, model):
+        self._ast_model = model
 
-        self._current_step_line = msg
-        self._step_spinner_frame = 0
-        self._rewrite_progress()
+    def _on_worker_progress(self, msg: str):
+        self._steps.append(msg)
+        done = [f"  ✓ {s}" for s in self._steps[:-1]]
+        self.output_editor.setPlaceholderText("\n".join(done + [f"  … {self._steps[-1]}"]))
 
-    def _rewrite_progress(self):
-        cursor = self.output_editor.textCursor()
-        cursor.select(QTextCursor.SelectionType.Document)
-        cursor.removeSelectedText()
-
-        fmt_done = QTextCharFormat()
-        fmt_done.setForeground(QColor("#16a34a"))
-        fmt_done.setFontWeight(QFont.Weight.Normal)
-
-        fmt_active = QTextCharFormat()
-        fmt_active.setForeground(QColor("#2563eb"))
-        fmt_active.setFontWeight(QFont.Weight.Bold)
-
-        fmt_label = QTextCharFormat()
-        fmt_label.setForeground(QColor("#9ca3af"))
-        fmt_label.setFontWeight(QFont.Weight.Normal)
-
-        for step in self._completed_steps:
-            cursor.setCharFormat(fmt_label)
-            cursor.insertText("  ")
-            cursor.setCharFormat(fmt_done)
-            cursor.insertText("\u2713 ")
-            cursor.setCharFormat(fmt_label)
-            cursor.insertText(f"{step}\n")
-
-        if self._current_step_line:
-            spinner_char = _SPINNER_FRAMES[self._step_spinner_frame % len(_SPINNER_FRAMES)]
-            cursor.setCharFormat(fmt_label)
-            cursor.insertText("  ")
-            cursor.setCharFormat(fmt_active)
-            cursor.insertText(f"{spinner_char} ")
-            cursor.setCharFormat(fmt_label)
-            cursor.insertText(f"{self._current_step_line}")
-
-    def _tick_step_spinner(self):
-        self._step_spinner_frame += 1
-        if self._current_step_line:
-            self._rewrite_progress()
-
-    def on_generation_finished(self, status, code, results_dict):
-        self._is_generating = False
-        self._step_spinner_timer.stop()
+    def _finish_run(self):
         self.progress_bar.hide()
+        self.output_editor.setPlaceholderText("Annotated code will appear here…")
 
-        if self._current_step_line is not None:
-            self._completed_steps.append(self._current_step_line)
-            self._current_step_line = None
+    def _on_succeeded(self, payload: dict):
+        self._finish_run()
+        result = payload["result"]
+        self.last_output_file = payload["output_file"]
+        self.output_editor.setPlainText(payload["annotated"])
+        self._set_output_actions_enabled(True)
+        self._apply_diff()
+        n_added = len(added_lines(self._source_for_output, payload["annotated"]))
+        self.oh_title.setText(f"Annotated Output — {len(result.comments)} comments, "
+                              f"{n_added} lines added")
+        self.oh_title.setToolTip(f"Saved to {self.last_output_file}")
+        self.generationFinished.emit(True, {
+            "mf": result.module_features,
+            "cg": result.context_graph,
+            "ir": result.ir_module,
+            "analysis": result.analysis_report,
+            "security_report": result.security_report,
+            "output_file": self.last_output_file,
+            "comments": len(result.comments),
+        })
 
-        if status == "Success":
-            self.output_editor.setPlainText(code)
-            self.oh_title.setText("Annotated Output")
-            self.generationFinished.emit("Generation Completed", "", results_dict)
-        else:
-            cursor = self.output_editor.textCursor()
-            cursor.select(QTextCursor.SelectionType.Document)
-            cursor.removeSelectedText()
+    def _on_failed(self, error: dict):
+        self._finish_run()
+        self.oh_title.setText("Annotated Output — failed")
+        self.oh_title.setToolTip("")
+        message = error.get("message") or "Generation failed."
+        if error.get("line"):
+            self.goto_line(error["line"], theme.ERROR_LINE_TINT)
+            message += "  The line is highlighted in the input."
+        if error.get("detail"):
+            # Full traceback goes to the console pane, not into a code view.
+            print(error["detail"], file=sys.stderr)
+            message += "  Full details are in the console below."
+        self.error_banner.setText(message)
+        self.error_banner.show()
+        # The badge described the previous run's code, not this one.
+        self.update_unsafe_pct(None, analysed=False)
+        self.generationFinished.emit(False, error)
 
-            fmt_done = QTextCharFormat()
-            fmt_done.setForeground(QColor("#16a34a"))
-            fmt_err = QTextCharFormat()
-            fmt_err.setForeground(QColor("#dc2626"))
-            fmt_err.setFontWeight(QFont.Weight.Bold)
-            fmt_label = QTextCharFormat()
-            fmt_label.setForeground(QColor("#9ca3af"))
-
-            for step in self._completed_steps:
-                cursor.setCharFormat(fmt_label)
-                cursor.insertText("  ")
-                cursor.setCharFormat(fmt_done)
-                cursor.insertText("\u2713 ")
-                cursor.setCharFormat(fmt_label)
-                cursor.insertText(f"{step}\n")
-
-            cursor.setCharFormat(fmt_label)
-            cursor.insertText("  ")
-            cursor.setCharFormat(fmt_err)
-            cursor.insertText("\u2717 Generation failed\n\n")
-            cursor.setCharFormat(fmt_err)
-            cursor.insertText(status)
-
-            self.oh_title.setText("Annotated Output \u2014 Failed")
-            self.generationFinished.emit("Generation Failed", "", None)
-
-    def update_annotated_code(self, code):
-        self.output_editor.setPlainText(code)
-
-    def update_unsafe_pct(self, security_report):
-        if security_report is None:
-            self.unsafe_label.setText("N/A")
-            self.unsafe_label.setStyleSheet(
-                "color: #6c757d; font-weight: bold; font-size: 13px; "
-                "padding: 4px 10px; border-radius: 6px;"
-            )
+    # ── security badge ────────────────────────────────────────────────────
+    def update_unsafe_pct(self, security_report, analysed: bool = True):
+        if security_report is None or not analysed:
+            self.unsafe_label.setText("Security: not analysed")
+            self.unsafe_label.setToolTip("Generate comments or run a scan in the Security tab.")
+            self.unsafe_label.setStyleSheet(theme.badge_style(theme.TEXT_MUTED, filled=False))
+            return
+        if getattr(security_report, "parse_error", None):
+            self.unsafe_label.setText("Security: could not parse")
+            self.unsafe_label.setStyleSheet(theme.badge_style(theme.DANGER))
             return
         unsafe_pct = round(100.0 - security_report.module_safe_pct, 1)
+        issues = security_report.total_issues
         if unsafe_pct > 20:
-            color = "#dc2626"
-            bg = "rgba(220,38,38,0.08)"
-        elif unsafe_pct > 0:
-            color = "#ca8a04"
-            bg = "rgba(202,138,4,0.08)"
+            color = theme.DANGER
+        elif unsafe_pct > 0 or issues:
+            color = theme.WARNING
         else:
-            color = "#16a34a"
-            bg = "rgba(22,163,74,0.08)"
-        self.unsafe_label.setText(f"{unsafe_pct}% unsafe")
-        self.unsafe_label.setStyleSheet(
-            f"color: {color}; font-weight: bold; font-size: 13px; "
-            f"padding: 4px 10px; background: {bg}; border-radius: 6px;"
-        )
+            color = theme.SUCCESS
+        self.unsafe_label.setText(f"{unsafe_pct:g}% unsafe · {issues} issue{'s' if issues != 1 else ''}")
+        self.unsafe_label.setToolTip("Share of functions scoring below 80 on the security analysis.")
+        self.unsafe_label.setStyleSheet(theme.badge_style(color))
+
+    # ── persisted state ───────────────────────────────────────────────────
+    def save_settings(self, settings):
+        settings.setValue("generator/engine", self.selected_engine())
+        settings.setValue("generator/output_dir", self.out_dir_input.text())
+        settings.setValue("generator/last_dir", self._last_dir)
+        settings.setValue("generator/splitter", self.splitter.saveState())
+        settings.setValue("generator/highlight_added", self.btn_diff.isChecked())
+
+    def restore_settings(self, settings):
+        self.set_engine(str(settings.value("generator/engine", "") or ""))
+        out_dir = settings.value("generator/output_dir", "")
+        if out_dir:
+            self.out_dir_input.setText(str(out_dir))
+        self._last_dir = str(settings.value("generator/last_dir", "") or "")
+        state = settings.value("generator/splitter")
+        if state is not None:
+            self.splitter.restoreState(state)
+        self.btn_diff.setChecked(str(settings.value("generator/highlight_added", "true")).lower() != "false")

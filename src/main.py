@@ -10,7 +10,7 @@ Usage:
 
 Options:
     --output <out.py>    Write annotated source to this file
-    --logs               Save JSON + text pipeline logs to logs/
+    --logs               Save JSON + text pipeline logs to <output-dir>/logs/
     --show-features      Print extracted AST features as JSON
     --show-context       Print the context graph as JSON
     --ir                 Print the pretty-printed IR dump
@@ -28,6 +28,7 @@ import os
 import json
 import argparse
 import warnings
+from typing import Any, NamedTuple
 
 # Suppress SyntaxWarnings from ast.parse when evaluating legacy CodeSearchNet/Stdlib files
 warnings.filterwarnings("ignore", category=SyntaxWarning)
@@ -54,12 +55,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("filepath", nargs="?", default=None,
                    help="Path to the Python source file to annotate")
-    p.add_argument("--block-max-pairs", type=int, default=20000,
-                        help="Maximum block-level (code -> inline comment) pairs to extract.")
     p.add_argument("--output", "-o", metavar="FILE",
                    help="Write annotated source to FILE (default: print to stdout)")
     p.add_argument("--logs", action="store_true",
-                   help="Save pipeline logs (JSON + text) to logs/ directory")
+                   help="Save pipeline logs (JSON + text) to <output-dir>/logs/ and the "
+                        "analysis report to <output-dir>/analysis_report.json")
     p.add_argument("--show-features", action="store_true",
                    help="Print extracted AST features as JSON")
     p.add_argument("--show-context", action="store_true",
@@ -135,7 +135,43 @@ def run_security_only(filepath: str, json_path=None) -> int:
     return 1 if active else 0
 
 
-def run_pipeline(filepath: str, logger: PipelineLogger, ast_model=None, strict_ml: bool = False, engine: str = "rule_based"):
+class PipelineResult(NamedTuple):
+    """
+    Everything one pipeline run produces.
+
+    A NamedTuple, so callers can use field names (``result.security_report``)
+    while existing code that unpacks or indexes the 8 values keeps working.
+    """
+    annotated_source: str
+    comments: list
+    module_features: Any
+    context_graph: Any
+    attach_result: Any
+    ir_module: Any
+    analysis_report: Any
+    security_report: SecurityReport
+
+
+def analysis_report_to_dict(analysis_report) -> dict:
+    """JSON-serialisable form of the pattern-analysis report."""
+    return {
+        "source_file": analysis_report.source_file,
+        "summary": analysis_report.summary,
+        "findings": [
+            {
+                "pattern_id": f.pattern_id,
+                "severity": f.severity,
+                "function": f.function_name,
+                "message": f.message,
+                "lineno": f.lineno,
+            }
+            for f in analysis_report.findings
+        ],
+    }
+
+
+def run_pipeline(filepath: str, logger: PipelineLogger, ast_model=None, strict_ml: bool = False,
+                 engine: str = "rule_based") -> PipelineResult:
     """
     Execute the full pipeline (Week 7–8 stages + Week 9 ML generation).
 
@@ -147,8 +183,7 @@ def run_pipeline(filepath: str, logger: PipelineLogger, ast_model=None, strict_m
         engine:         One of "rule_based", "ml", "neurosymbolic".
 
     Returns:
-        (annotated_source, comments, module_features, context_graph,
-         attach_result, ir_module, analysis_report)
+        A :class:`PipelineResult`.
     """
     # ── Stage 1: Parse ───────────────────────────────────────────────
     logger.begin_stage("parse")
@@ -255,9 +290,9 @@ def run_pipeline(filepath: str, logger: PipelineLogger, ast_model=None, strict_m
         "by_status": security_report.by_status,
     })
 
-    return (attach_result.annotated_source, comments, module_features,
-            context_graph, attach_result, ir_module, analysis_report,
-            security_report)
+    return PipelineResult(attach_result.annotated_source, comments, module_features,
+                          context_graph, attach_result, ir_module, analysis_report,
+                          security_report)
 
 
 def main():
@@ -350,16 +385,19 @@ def main():
                 print(f"  ML models loaded from: {output_dir}/model/")
             else:
                 print("  [error] No trained AST+NLP model found.")
-                print("          Train first: python3 -m src.main --train")
+                print("          Train first: python -m src.main --train")
                 sys.exit(2)
         except Exception as exc:
             print(f"  [error] Could not load AST+NLP model: {exc}")
-            print("          Train first: python3 -m src.main --train")
+            print("          Train first: python -m src.main --train")
             sys.exit(2)
 
     try:
-        annotated, comments, mf, cg, attach_result, ir_module, analysis_report, security_report = \
-            run_pipeline(filepath, logger, ast_model=ast_model, strict_ml=args.ml or args.neurosymbolic, engine=engine)
+        result = run_pipeline(filepath, logger, ast_model=ast_model,
+                              strict_ml=args.ml or args.neurosymbolic, engine=engine)
+        annotated, comments = result.annotated_source, result.comments
+        mf, cg, ir_module = result.module_features, result.context_graph, result.ir_module
+        analysis_report, security_report = result.analysis_report, result.security_report
     except ParserError as e:
         print(f"\n{format_error(e)}")
         sys.exit(1)
@@ -431,40 +469,17 @@ def main():
 
     # ── Save Logs ─────────────────────────────────────────────────
     if args.logs:
-        # Determine logs dir relative to the input file's directory
-        base_dir = os.path.dirname(os.path.abspath(filepath))
-        logs_dir = os.path.join(base_dir, "..", "logs")
-        logs_dir = os.path.normpath(logs_dir)
+        # Always under --output-dir (default: <project>/outputs), never a path
+        # derived from where the input file happens to live.
+        logs_dir = os.path.join(output_dir, "logs")
         json_path, text_path = logger.save(logs_dir)
         print(f"\n  Logs saved:")
         print(f"    JSON : {json_path}")
         print(f"    Text : {text_path}")
-        # Save analysis report JSON
-        report_path = os.path.join(
-            os.path.dirname(os.path.abspath(filepath)), "..", "outputs", "analysis_report.json"
-        )
-        report_path = os.path.normpath(report_path)
-        os.makedirs(os.path.dirname(report_path), exist_ok=True)
-        import json as _json
+        report_path = os.path.join(output_dir, "analysis_report.json")
+        os.makedirs(output_dir, exist_ok=True)
         with open(report_path, 'w', encoding='utf-8') as rf:
-            _json.dump(
-                {
-                    "source_file": analysis_report.source_file,
-                    "summary": analysis_report.summary,
-                    "findings": [
-                        {
-                            "pattern_id": f.pattern_id,
-                            "severity": f.severity,
-                            "function": f.function_name,
-                            "message": f.message,
-                            "lineno": f.lineno,
-                        }
-                        for f in analysis_report.findings
-                    ],
-                },
-                rf,
-                indent=2,
-            )
+            json.dump(analysis_report_to_dict(analysis_report), rf, indent=2)
         print(f"    Analysis: {report_path}")
 
     print(f"\n{'='*55}\n")
