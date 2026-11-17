@@ -1,14 +1,15 @@
 # Progress Against the Proposed Architecture
 
-Status as of 10 November 2026. "Proposed architecture" = the design in
+Status as of 18 November 2026. "Proposed architecture" = the design in
 [architecture.png](architecture.png) and the project presentation (`CodeCommentGenerator.pptx`).
-Every status below was checked by running the code (CLI, GUI and the 229-test suite), not
+Every status below was checked by running the code (CLI, GUI and the 268-test suite), not
 taken from earlier notes.
 
 **Overall:** all 11 components of the proposed architecture are built, connected and
 working end to end. The one remaining gap is quality, not building: the ML model's output
 quality. Measured by components, roughly **90 %** of the
-proposed system is complete; the security part goes beyond the original proposal.
+proposed system is complete. Two parts go beyond the original proposal: the security
+analyzer, and support for Java, C and C++ input in addition to Python (item 12).
 
 | # | Component (proposed) | Status | Evidence | Remaining work |
 |---|---|---|---|---|
@@ -23,8 +24,9 @@ proposed system is complete; the security part goes beyond the original proposal
 | 9 | IR + CFG + data-flow + 7 patterns | ✅ Done (rebuilt) | A6, A7, B8, B9; IR now lowered from the real AST (branches, loops, try/finally, match) | — |
 | 10 | Security analysis | ✅ Done, beyond proposal | Proposal: 12 pattern rules with a score. Now: 15 rules, taint analysis with source→sink traces, cross-file analysis, benchmarks (A8, A9, B11) | Recognise validation done in helper functions; model more sink APIs (see SECURITY_ANALYSIS.md §6) |
 | 11 | Outputs: annotated file, JSON reports, GUI views | ✅ Done | A2, B3, B13 | — |
+| 12 | Other input languages: Java, C, C++ (not in the proposal) | ✅ Done, beyond proposal | tree-sitter front end feeding the same AST features and context analysis; Javadoc / Doxygen comments; annotated files compile with javac / gcc / g++ (A11–A14, B14–B18) | Security analysis, IR and the ML engines are still Python-only; more languages (C#, Go, JavaScript) could reuse the same front end |
 | — | Evaluation (BLEU-4, ROUGE-L, exact match; security P/R/F1/FPR) | ✅ Done | B10, A9; OWASP held-out F1 0.90–0.92, real-world held-out F1 0.69 | Larger, independently reviewed real-world security benchmark |
-| — | Automated tests | ✅ Done | 229 passed (A10) | — |
+| — | Automated tests | ✅ Done | 268 passed (A10), including Java/C/C++ extraction, idempotence and compile checks | — |
 | — | Documentation | ✅ Done | README, docs/DOCUMENTATION.md, SECURITY_ANALYSIS.md, METHODOLOGY.md, existing and proposed architecture diagrams, these screenshots | — |
 
 ## Issues found while taking the screenshots — fixed on 10 November 2026

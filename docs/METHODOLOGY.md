@@ -1,7 +1,7 @@
 # Code Comment Generator using AST and NLP — Step-by-Step Methodology
 
-This document describes, step by step, how the system turns a Python source file into
-commented code, a code-quality report and a security report, and how the machine-learning
+This document describes, step by step, how the system turns a source file (Python, Java,
+C or C++) into commented code, a code-quality report and a security report, and how the machine-learning
 model behind it was built and evaluated. The overall flow is shown in
 [architecture.png](architecture.png).
 
@@ -27,6 +27,10 @@ exceptions) are extracted from the AST first; natural-language techniques (NLP) 
 neural model then turn those facts into readable English. Facts that must be exact —
 argument names, types, raised exceptions — always come from the AST, so the generated
 documentation cannot contradict the code.
+
+Steps 1–11 describe the Python pipeline. Java, C and C++ files go through the same stages up
+to comment attachment, using a tree-sitter parser instead of Python's `ast` module — see
+[Step 12](#step-12--other-languages-java-c-and-c).
 
 ---
 
@@ -262,6 +266,52 @@ operation.
 4. In security-only mode the command line exits with code 1 when active security findings
    exist, so the tool can be used in automated checks.
 
+## Step 12 — Other Languages: Java, C and C++
+
+**Goal:** give the same AST-driven comments to the most widely used compiled languages, not
+only to Python.
+
+1. **Language detection** (`src/languages/__init__.py`). The language is taken from the file
+   extension: `.java` → Java; `.c`/`.h` → C; `.cpp`, `.cc`, `.cxx`, `.hpp` → C++. A `.h` file
+   that uses C++ syntax (`class`, `namespace`, `template<…>`, `std::`) is treated as C++. In the
+   GUI the *Language* box follows the opened file and can be set by hand for pasted code.
+2. **Parsing with tree-sitter** (`src/languages/treesitter_extract.py`). Python's `ast`
+   module cannot read other languages, so these files are parsed with tree-sitter, an
+   incremental parser with maintained grammars for Java, C and C++. If the parser had to
+   recover from a syntax error, the line is reported as a warning instead of stopping the run.
+3. **Feature extraction into the same data model.** The tree-sitter tree is walked to fill the
+   *same* `FunctionFeature`, `ClassFeature` and `ModuleFeatures` objects as Step 4:
+   - functions, methods, constructors, destructors, template functions and header prototypes
+     (a prototype is skipped when the same file also defines the function);
+   - parameters with types and C++ default values, return types (including `*` and `&`),
+     Java annotations and C/C++ specifiers (`static`, `virtual`, `template`);
+   - classes, interfaces, enums, records, structs (including `typedef struct {…} Name;`) and
+     unions, with base classes, fields and methods;
+   - calls, loops, branches and thrown exceptions (`throw new X(…)` in Java, declared
+     `throws` clauses, `throw std::x(…)` in C++).
+4. **Context analysis.** Cyclomatic complexity is counted the same way as Step 5: one plus
+   every `if`, loop, `case`, `catch`, ternary and `&&`/`||`. Local variables are tracked with
+   their declared types, and calls are split into internal (to functions in the same file) and
+   external, giving the same `ContextGraph` and complexity labels.
+5. **Comment generation in the language's own style** (`src/languages/doc_render.py`). The
+   summary and body sentences come from the same rule-based NLP helpers as Step 6a
+   (identifier splitting, verb selection, body description); only the comment syntax changes:
+   - **Java → Javadoc:** `/** … */` with `@param`, `@return`, `@throws`, `{@code …}`; `<`, `>`
+     and `&` are escaped because Javadoc is HTML. The output passes `javadoc -Xdoclint`.
+   - **C / C++ → Doxygen:** `/** @brief … */` with `@param`, `@param[out]` for output pointers,
+     `@return` (including "or NULL on failure" when the function allocates), `@throws`.
+   - Special cases: constructors ("Creates a new X instance"), destructors, `main`, `toString`,
+     boolean `is…`/`has…` methods and noun-only names (`area()` → "Returns the area").
+   - Functions that are not simple also get a short `// Complexity: …` note above the comment.
+6. **Comment attachment** (`src/languages/pipeline.py`). Each comment is inserted directly
+   above the declaration (above `template<…>` and Java annotations), copying that line's own
+   indentation, tabs included. A declaration that already has a comment directly above it
+   (for Java, a `/** */` comment) is left alone, so a second run adds nothing.
+7. **What stays Python-only.** IR, pattern analysis (P001–P007), the security analyzer and the
+   ML / neuro-symbolic engines (the model was trained on Python docstrings). For other
+   languages the pipeline returns empty results for those stages, the CLI explains why, and the
+   GUI shows "Python only" instead of a security score.
+
 ---
 
 ## Model Training Methodology
@@ -318,9 +368,11 @@ reference wording. This is why the neuro-symbolic engine gates ML output by conf
 
 ## Testing and Evaluation Methodology
 
-1. **Automated tests** — 229 tests (`pytest tests`) covering parsing, IR semantics, data-flow
+1. **Automated tests** — 268 tests (`pytest tests`) covering parsing, IR semantics, data-flow
    analysis, comment placement (output must still compile and keep line integrity), the ML
-   path, the GUI adapters and the security analyzer.
+   path, the GUI and the security analyzer. For Java, C and C++ the tests check extraction,
+   comment content, that a second run adds nothing, that every original line is kept in order,
+   and that the annotated files still compile with `javac`, `gcc` and `g++`.
 2. **Security evaluation** on three separate datasets, using precision, recall, F1 and
    false-positive rate (undefined values reported as *undefined*, never as perfect):
    - **Synthetic fixtures** written with the analyzer — regression tests only.
@@ -340,7 +392,8 @@ reference wording. This is why the neuro-symbolic engine gates ML output by conf
 | Purpose | Technology |
 |---|---|
 | Language | Python 3.11 / 3.12 |
-| Parsing and analysis | Python `ast` module, custom IR, CFG and data-flow engine |
+| Input languages | Python, Java, C, C++ |
+| Parsing and analysis | Python `ast` module, tree-sitter (Java, C, C++), custom IR, CFG and data-flow engine |
 | NLP / ML | Hugging Face Transformers, PyTorch, T5-small |
 | Dataset | CodeSearchNet (Hugging Face `datasets`), Python standard library |
 | Evaluation metrics | BLEU-4, ROUGE-L, exact match; precision / recall / F1 / FPR |
