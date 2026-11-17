@@ -291,6 +291,15 @@ class MainWindow(QMainWindow):
             return
         self.workspace_insights.populate_insights(payload)
         security_report = payload.get("security_report")
+        language = payload.get("language", "python")
+        if language != "python":
+            from src.languages import language_name
+            self.workspace_security.show_unsupported(language_name(language))
+            self.workspace_gen.update_unsafe_pct(None, language=language)
+            self._set_status(f"✓ {payload.get('comments', 0)} comments generated ({language_name(language)})",
+                             theme.SUCCESS, reset_after_ms=8000)
+            self.toast.show_toast("Comments generated", kind="success")
+            return
         if security_report is not None:
             # populate() also refreshes the Generator's security badge.
             self.workspace_security.populate(security_report,
@@ -303,6 +312,13 @@ class MainWindow(QMainWindow):
         self.toast.show_toast("Comments generated", kind="success")
 
     def _scan_editor_code(self):
+        language = self.workspace_gen.selected_language()
+        if language != "python":
+            from src.languages import language_name
+            self.workspace_security.show_unsupported(language_name(language))
+            self.toast.show_toast(f"Security scanning is Python-only; {language_name(language)} "
+                                  f"is not scanned", kind="info")
+            return
         self.workspace_security.scan_source(self.workspace_gen.current_code(),
                                             self.workspace_gen.source_name())
 

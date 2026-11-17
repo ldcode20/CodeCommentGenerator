@@ -281,6 +281,20 @@ class SecurityWorkspace(QWidget):
         self._refill_table()
         self.reportShown.emit(security_report)
 
+    def show_unsupported(self, language: str):
+        """The editor holds a language the security analyzer does not handle."""
+        self._report, self._project = None, None
+        self._findings = []
+        self.btn_export.setEnabled(False)
+        self._graph_stack.setCurrentIndex(0)
+        self._empty_state.setText(
+            f"Security scanning is available for Python only.\n\n"
+            f"{language} code gets comments and code insights (complexity, call graph, "
+            f"AST views), but it is not scanned for vulnerabilities.")
+        self._set_score_badge("Not scanned (Python only)", theme.TEXT_MUTED)
+        self.source_label.setText(f"{language} — not scanned")
+        self._refill_table()
+
     def populate_project(self, project):
         """Show a folder scan (:class:`src.security.project.ProjectFindings`)."""
         self._report, self._project = None, project

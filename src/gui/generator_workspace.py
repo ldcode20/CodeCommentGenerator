@@ -10,7 +10,7 @@ from typing import List, Optional
 
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QGuiApplication
-from PyQt6.QtWidgets import (QButtonGroup, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
+from PyQt6.QtWidgets import (QButtonGroup, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
                              QMessageBox, QProgressBar, QPushButton, QRadioButton,
                              QSplitter, QVBoxLayout, QWidget)
 
@@ -18,10 +18,27 @@ from src.config import GUI_OUTPUT_DIR, OUTPUT_DIR, model_available, resolve_proj
 from src.error_handler import ParserError, format_error
 from src.gui import theme
 from src.gui.code_editor import CodeEditor
-from src.gui.syntax_highlighter import PythonSyntaxHighlighter
+from src.gui.syntax_highlighter import make_code_highlighter
+from src.languages import LANGUAGES, detect_language, file_dialog_filter, language_name
 from src.logger import PipelineLogger
 
 UNTITLED = "untitled.py"
+LANGUAGE_KEYS = ("python", "java", "c", "cpp")
+
+
+def default_extension(language: str) -> str:
+    return LANGUAGES[language].extensions[0]
+
+
+def pipeline_file_name(source_path: Optional[str], code: str, language: str) -> str:
+    """Name for the pipeline's private copy: the real name when its extension matches
+    the chosen language, otherwise the stem with the language's own extension."""
+    if source_path:
+        name = os.path.basename(source_path)
+        if detect_language(name, code) == language:
+            return name
+        return os.path.splitext(name)[0] + default_extension(language)
+    return "untitled" + default_extension(language)
 ENGINES = ("rule_based", "neurosymbolic", "ml")
 _NO_MODEL_HINT = "No trained model yet — train one in the ML Training tab."
 
@@ -44,9 +61,10 @@ class GeneratorWorker(QThread):
     modelLoaded = pyqtSignal(object)    # the loaded model, for reuse by later runs
 
     def __init__(self, code_text: str, engine: str, output_dir: str,
-                 source_path: Optional[str], ast_model=None):
+                 source_path: Optional[str], ast_model=None, language: str = "python"):
         super().__init__()
         self.code_text = code_text
+        self.language = language
         self.engine = engine
         self.output_dir = output_dir
         self.source_path = source_path
@@ -57,12 +75,15 @@ class GeneratorWorker(QThread):
             # Imported here so opening the window does not pay for torch.
             from src.main import run_pipeline
 
-            name = os.path.basename(self.source_path) if self.source_path else UNTITLED
-            stem = os.path.splitext(name)[0]
+            name = pipeline_file_name(self.source_path, self.code_text, self.language)
+            stem, ext = os.path.splitext(name)
             os.makedirs(self.output_dir, exist_ok=True)
 
             ast_model = self.ast_model
-            if self.engine in ("ml", "neurosymbolic") and ast_model is None:
+            if self.language != "python" and self.engine != "rule_based":
+                self.progress.emit(f"The ML model was trained on Python; using rule-based "
+                                   f"comments for {language_name(self.language)}…")
+            elif self.engine in ("ml", "neurosymbolic") and ast_model is None:
                 self.progress.emit("Loading AST+NLP model…")
                 from src.ml.trainer import load_ast_model
                 ast_model = load_ast_model(output_dir=str(OUTPUT_DIR))
@@ -94,7 +115,7 @@ class GeneratorWorker(QThread):
                 finding.file = shown_path
 
             self.progress.emit("Saving output and logs…")
-            out_file = os.path.join(self.output_dir, f"{stem}_annotated.py")
+            out_file = os.path.join(self.output_dir, f"{stem}_annotated{ext}")
             with open(out_file, "w", encoding="utf-8") as fh:
                 fh.write(result.annotated_source)
             logger.set_output_file(out_file)
@@ -202,17 +223,29 @@ class GeneratorWorkspace(QWidget):
         self.ih_title = QLabel("Input")
         self.btn_pick_file = QPushButton("Open File…")
         self.btn_pick_file.setProperty("class", "SecondaryButton")
-        self.btn_pick_file.setToolTip("Open a Python file (Ctrl+O). You can also drop a file on the editor.")
+        self.btn_pick_file.setToolTip("Open a Python, Java, C or C++ file (Ctrl+O). "
+                                      "You can also drop a file on the editor.")
         self.btn_pick_file.clicked.connect(lambda: self.open_file())
+        self.lang_combo = QComboBox()
+        for key in LANGUAGE_KEYS:
+            self.lang_combo.addItem(language_name(key), key)
+        self.lang_combo.setToolTip("Language of the input. Set automatically when you open a file. "
+                                   "Java, C and C++ get Javadoc / Doxygen comments and code insights; "
+                                   "IR, pattern analysis, security scanning and the ML engines are Python-only.")
+        self.lang_combo.currentIndexChanged.connect(lambda _i: self._apply_language())
         ih_layout.addWidget(self.ih_title)
         ih_layout.addStretch()
+        lang_lbl = QLabel("Language:")
+        lang_lbl.setProperty("class", "Caption")
+        ih_layout.addWidget(lang_lbl)
+        ih_layout.addWidget(self.lang_combo)
         ih_layout.addWidget(self.btn_pick_file)
 
         self.input_editor = CodeEditor()
         self.input_editor.setProperty("class", "CodeEditor")
         self.input_editor.setPlaceholderText(
-            "Paste Python code here, drop a .py file, or use Open File…")
-        self.input_highlighter = PythonSyntaxHighlighter(self.input_editor.document())
+            "Paste Python, Java, C or C++ code here, drop a source file, or use Open File…")
+        self.input_highlighter = make_code_highlighter(self.input_editor.document(), "python")
         self.input_editor.fileDropped.connect(self.load_file)
         self.input_editor.textChanged.connect(self.input_editor.clear_marker)
 
@@ -261,7 +294,8 @@ class GeneratorWorkspace(QWidget):
         self.output_editor = CodeEditor(read_only=True)
         self.output_editor.setProperty("class", "DiffEditor")
         self.output_editor.setPlaceholderText("Annotated code will appear here…")
-        self.output_highlighter = PythonSyntaxHighlighter(self.output_editor.document())
+        self.output_highlighter = make_code_highlighter(self.output_editor.document(), "python")
+        self._highlight_language = "python"
 
         output_layout.addWidget(output_header)
         output_layout.addWidget(self.error_banner)
@@ -272,6 +306,37 @@ class GeneratorWorkspace(QWidget):
         layout.addWidget(self.splitter, stretch=1)
 
         self._set_output_actions_enabled(False)
+
+    # ── language ──────────────────────────────────────────────────────────
+    def selected_language(self) -> str:
+        return self.lang_combo.currentData() or "python"
+
+    def set_language(self, language: str):
+        idx = self.lang_combo.findData(language)
+        if idx >= 0:
+            self.lang_combo.setCurrentIndex(idx)
+        self._apply_language()
+
+    def _apply_language(self):
+        language = self.selected_language()
+        if language == self._highlight_language:
+            return
+        self._highlight_language = language
+        for attr, editor in (("input_highlighter", self.input_editor), ("output_highlighter", self.output_editor)):
+            old = getattr(self, attr)
+            old.setDocument(None)
+            setattr(self, attr, make_code_highlighter(editor.document(), language))
+        python = language == "python"
+        for btn in (self.btn_neuro, self.btn_ml):
+            if not python:
+                btn.setToolTip("The ML model was trained on Python; other languages use rule-based comments.")
+        if not python and not self.btn_rule.isChecked():
+            self.btn_rule.setChecked(True)
+        if python:
+            self.refresh_engine_availability()
+        else:
+            self.btn_neuro.setEnabled(False)
+            self.btn_ml.setEnabled(False)
 
     # ── engine selection ──────────────────────────────────────────────────
     def selected_engine(self) -> str:
@@ -285,7 +350,7 @@ class GeneratorWorkspace(QWidget):
 
     def refresh_engine_availability(self):
         """Enable the model-backed engines only when a checkpoint exists."""
-        available = model_available()
+        available = model_available() and self.selected_language() == "python"
         for btn, tip in ((self.btn_neuro, "Confidence-gated fusion of the ML summary and symbolic rules."),
                          (self.btn_ml, "Summary generated by the trained AST+NLP model.")):
             btn.setEnabled(available)
@@ -314,7 +379,7 @@ class GeneratorWorkspace(QWidget):
     def open_file(self, path: Optional[str] = None):
         if not path:
             path, _ = QFileDialog.getOpenFileName(
-                self, "Open Python file", self._last_dir, "Python Files (*.py);;All Files (*)")
+                self, "Open source file", self._last_dir, file_dialog_filter())
         if path:
             self.load_file(path)
 
@@ -327,6 +392,7 @@ class GeneratorWorkspace(QWidget):
             return False
         self.current_filepath = os.path.abspath(path)
         self._last_dir = os.path.dirname(self.current_filepath)
+        self.set_language(detect_language(path, text))
         self.input_editor.setPlainText(text)
         self._update_input_title()
         return True
@@ -340,7 +406,7 @@ class GeneratorWorkspace(QWidget):
             self.ih_title.setToolTip("")
 
     def source_name(self) -> str:
-        return os.path.basename(self.current_filepath) if self.current_filepath else UNTITLED
+        return pipeline_file_name(self.current_filepath, self.current_code(), self.selected_language())
 
     def current_code(self) -> str:
         return self.input_editor.toPlainText()
@@ -368,10 +434,9 @@ class GeneratorWorkspace(QWidget):
         """Save the annotated code where the user chooses. Returns the path, or None."""
         if not self.has_output():
             return None
-        stem = os.path.splitext(self.source_name())[0]
-        start = os.path.join(self._last_dir or self.output_dir(), f"{stem}_annotated.py")
-        path, _ = QFileDialog.getSaveFileName(self, "Save annotated code", start,
-                                              "Python Files (*.py);;All Files (*)")
+        stem, ext = os.path.splitext(self.source_name())
+        start = os.path.join(self._last_dir or self.output_dir(), f"{stem}_annotated{ext}")
+        path, _ = QFileDialog.getSaveFileName(self, "Save annotated code", start, file_dialog_filter())
         if not path:
             return None
         if self.current_filepath and os.path.abspath(path) == self.current_filepath:
@@ -412,7 +477,7 @@ class GeneratorWorkspace(QWidget):
             return False
         code = self.current_code()
         if not code.strip():
-            QMessageBox.warning(self, "No code", "Open a file or paste some Python code first.")
+            QMessageBox.warning(self, "No code", "Open a file or paste some code first.")
             return False
 
         self._steps = []
@@ -426,7 +491,8 @@ class GeneratorWorkspace(QWidget):
         self._emit_output_dir()
 
         self.worker = GeneratorWorker(code, self.selected_engine(), self.output_dir(),
-                                      self.current_filepath, self._ast_model)
+                                      self.current_filepath, self._ast_model,
+                                      language=self.selected_language())
         self.worker.progress.connect(self._on_worker_progress)
         self.worker.modelLoaded.connect(self._on_model_loaded)
         self.worker.succeeded.connect(self._on_succeeded)
@@ -466,6 +532,7 @@ class GeneratorWorkspace(QWidget):
             "security_report": result.security_report,
             "output_file": self.last_output_file,
             "comments": len(result.comments),
+            "language": getattr(result, "language", "python"),
         })
 
     def _on_failed(self, error: dict):
@@ -487,7 +554,12 @@ class GeneratorWorkspace(QWidget):
         self.generationFinished.emit(False, error)
 
     # ── security badge ────────────────────────────────────────────────────
-    def update_unsafe_pct(self, security_report, analysed: bool = True):
+    def update_unsafe_pct(self, security_report, analysed: bool = True, language: str = "python"):
+        if language != "python":
+            self.unsafe_label.setText("Security: Python only")
+            self.unsafe_label.setToolTip(f"Security scanning is not available for {language_name(language)} yet.")
+            self.unsafe_label.setStyleSheet(theme.badge_style(theme.TEXT_MUTED, filled=False))
+            return
         if security_report is None or not analysed:
             self.unsafe_label.setText("Security: not analysed")
             self.unsafe_label.setToolTip("Generate comments or run a scan in the Security tab.")
@@ -512,6 +584,7 @@ class GeneratorWorkspace(QWidget):
     # ── persisted state ───────────────────────────────────────────────────
     def save_settings(self, settings):
         settings.setValue("generator/engine", self.selected_engine())
+        settings.setValue("generator/language", self.selected_language())
         settings.setValue("generator/output_dir", self.out_dir_input.text())
         settings.setValue("generator/last_dir", self._last_dir)
         settings.setValue("generator/splitter", self.splitter.saveState())
@@ -519,6 +592,7 @@ class GeneratorWorkspace(QWidget):
 
     def restore_settings(self, settings):
         self.set_engine(str(settings.value("generator/engine", "") or ""))
+        self.set_language(str(settings.value("generator/language", "python") or "python"))
         out_dir = settings.value("generator/output_dir", "")
         if out_dir:
             self.out_dir_input.setText(str(out_dir))

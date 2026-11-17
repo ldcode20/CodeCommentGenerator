@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "code-comment-generator"
 version = "1.0.0"
-description = "Python comment/docstring generation from the AST (rule-based, ML and neurosymbolic engines) with a taint-based security analyzer"
+description = "Comment/docstring generation from the AST for Python, Java, C and C++ (rule-based, ML and neurosymbolic engines) with a taint-based Python security analyzer"
 readme = "README.md"
 license = { file = "LICENSE" }
 # PyTorch publishes no wheels for 3.14 yet — see README "Setup".
@@ -23,6 +23,13 @@ ml = [
     "datasets>=2.19",
     "nltk",
 ]
+# Java, C and C++ input files
+langs = [
+    "tree-sitter>=0.23",
+    "tree-sitter-java",
+    "tree-sitter-c",
+    "tree-sitter-cpp",
+]
 # run_gui.py / code-comment-gen-gui
 gui = [
     "PyQt6",
@@ -32,7 +39,7 @@ dev = [
     "pytest",
 ]
 all = [
-    "code-comment-generator[ml,gui,dev]",
+    "code-comment-generator[ml,langs,gui,dev]",
 ]
 
 [project.scripts]

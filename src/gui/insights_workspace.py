@@ -124,6 +124,7 @@ class InsightsWorkspace(QWidget):
         cg = pipeline_results.get("cg")
         ir_module = pipeline_results.get("ir")
         analysis_report = pipeline_results.get("analysis")
+        language = pipeline_results.get("language", "python")
 
         self.tree_ast.clear()
         if mf:
@@ -183,6 +184,17 @@ class InsightsWorkspace(QWidget):
             self.tree_ctx.expandAll()
 
             self.call_graph.set_data(cg)
+
+        if language != "python":
+            from src.languages import language_name
+            note = (f"The IR and pattern analysis are available for Python only.\n\n"
+                    f"{language_name(language)} files get the AST, context and call-graph views.")
+            self.tab_ir.setPlainText(note)
+            self._stack_ir.setCurrentIndex(1)
+            self.table_analysis.setRowCount(0)
+            self._empty_analysis.setText(note)
+            self._stack_analysis.setCurrentIndex(0)
+            return
 
         if ir_module:
             self._stack_ir.setCurrentIndex(1)

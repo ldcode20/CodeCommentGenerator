@@ -169,6 +169,35 @@ class TestGuiSmoke(unittest.TestCase):
         finally:
             again.close()
 
+    def test_java_file_gets_javadoc_and_python_only_notes(self):
+        sample = os.path.join(ROOT, "tests", "inputs", "multilang", "Inventory.java")
+        gen = self.window.workspace_gen
+        self.assertTrue(gen.load_file(sample))
+        self.assertEqual(gen.selected_language(), "java")
+        self.assertFalse(gen.btn_ml.isEnabled() or gen.btn_neuro.isEnabled())
+        self.assertEqual(type(gen.input_highlighter).__name__, "CFamilySyntaxHighlighter")
+        self._generate(sample)
+        output = gen.output_editor.toPlainText()
+        self.assertIn("/**", output)
+        self.assertIn("@throws IOException", output)
+        self.assertEqual(os.path.basename(gen.last_output_file), "Inventory_annotated.java")
+        self.assertIn("Python only", gen.unsafe_label.text())
+        self.assertIn("not scanned", self.window.workspace_security.source_label.text())
+        self.assertIn("Python only", self.window.workspace_insights.tab_ir.toPlainText())
+        self.assertGreater(self.window.workspace_insights.tree_ast.topLevelItemCount(), 0)
+
+    def test_language_switch_swaps_highlighter_and_engines(self):
+        gen = self.window.workspace_gen
+        for language in ("c", "cpp", "java"):
+            gen.set_language(language)
+            gen.input_editor.setPlainText('/* a\n b */ int main(void) { return "x\\"y"[0]; } // c\n')
+            self.app.processEvents()
+            self.assertEqual(type(gen.output_highlighter).__name__, "CFamilySyntaxHighlighter")
+            self.assertEqual(gen.source_name(), "untitled" + {"c": ".c", "cpp": ".cpp", "java": ".java"}[language])
+        gen.set_language("python")
+        self.assertEqual(type(gen.input_highlighter).__name__, "PythonSyntaxHighlighter")
+        self.assertEqual(gen.source_name(), "untitled.py")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

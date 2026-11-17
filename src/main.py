@@ -46,15 +46,18 @@ from .logger import PipelineLogger
 from .ir import build_ir, pretty_print_ir, serialize_ir
 from .analysis import build_cfg, run_dfa, detect_patterns
 from .security_analyzer import run_security_analysis, SecurityReport
+from .languages import detect_language, language_name
+from .languages.pipeline import PYTHON_ONLY_NOTE, run_foreign_pipeline
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="code-comment-gen",
-        description="Code Comment Generation via AST with two engines: Rule-Based and AST+NLP ML",
+        description="Code Comment Generation via AST for Python, Java, C and C++ "
+                    "(Rule-Based, AST+NLP ML and Neurosymbolic engines; ML engines are Python-only)",
     )
     p.add_argument("filepath", nargs="?", default=None,
-                   help="Path to the Python source file to annotate")
+                   help="Source file to annotate: .py, .java, .c/.h or .cpp/.cc/.hpp")
     p.add_argument("--output", "-o", metavar="FILE",
                    help="Write annotated source to FILE (default: print to stdout)")
     p.add_argument("--logs", action="store_true",
@@ -120,6 +123,9 @@ def _write_security_json(path: str, findings_obj) -> None:
 def run_security_only(filepath: str, json_path=None) -> int:
     """Security analysis independent of comment generation and the ML model."""
     from .security import analyze_file
+    if os.path.isfile(filepath) and detect_language(filepath) != "python":
+        print(f"  Security analysis is Python-only; {filepath} was not scanned.")
+        return 0
     report = analyze_file(filepath)
     if report.parse_error:
         print(f"  Could not parse {filepath}: {report.parse_error}")
@@ -150,6 +156,7 @@ class PipelineResult(NamedTuple):
     ir_module: Any
     analysis_report: Any
     security_report: SecurityReport
+    language: str = "python"        # "python", "java", "c" or "cpp"
 
 
 def analysis_report_to_dict(analysis_report) -> dict:
@@ -185,9 +192,14 @@ def run_pipeline(filepath: str, logger: PipelineLogger, ast_model=None, strict_m
     Returns:
         A :class:`PipelineResult`.
     """
+    source_code = read_file(filepath)
+    language = detect_language(filepath, source_code)
+    if language != "python":
+        # Java / C / C++: tree-sitter front end, rule-based doc comments, insights.
+        return run_foreign_pipeline(filepath, source_code, language, logger, engine=engine)
+
     # ── Stage 1: Parse ───────────────────────────────────────────────
     logger.begin_stage("parse")
-    source_code = read_file(filepath)
     ast_tree = parse_code(source_code)
     logger.end_stage(summary={
         "total_lines": len(source_code.splitlines()),
@@ -365,6 +377,17 @@ def main():
     print("  Code Comment Generation — Rule-Based + AST+NLP ML + Neurosymbolic")
     print(f"{'='*55}")
     print(f"  Input : {filepath}")
+    try:
+        with open(filepath, encoding="utf-8") as fh:
+            language = detect_language(filepath, fh.read())
+    except OSError:
+        language = detect_language(filepath)
+    print(f"  Language: {language_name(language)}")
+    foreign = language != "python"
+    if foreign and (args.ml or args.neurosymbolic):
+        print(f"  [note] The ML model was trained on Python docstrings; using rule-based "
+              f"generation for {language_name(language)}.")
+        args.ml = args.neurosymbolic = False
 
     engine = "rule_based"
     if args.neurosymbolic:
@@ -415,13 +438,16 @@ def main():
         print("\n--- Semantic Context Graph ---")
         print(json.dumps(context_to_dict(cg), indent=2))
 
+    if foreign and (args.ir or args.analysis or args.security_report or args.security_json):
+        print(f"\n  [note] {PYTHON_ONLY_NOTE.format(lang=language_name(language))}")
+
     # ── Show IR dump ──────────────────────────────────────────────
-    if args.ir:
+    if args.ir and not foreign:
         print("\n--- IR Dump ---")
         print(pretty_print_ir(ir_module))
 
     # ── Show Analysis report ──────────────────────────────────────
-    if args.analysis:
+    if args.analysis and not foreign:
         print("\n--- Analysis Report ---")
         if analysis_report.findings:
             for finding in analysis_report.findings:
@@ -435,25 +461,31 @@ def main():
     print(f"\n  Functions found : {len(mf.functions)}")
     print(f"  Classes found   : {len(mf.classes)}")
     print(f"  Comments generated: {len(comments)}")
-    print(f"  IR functions built: {len(ir_module.functions)}")
-    print(f"  Analysis findings : {len(analysis_report.findings)}")
-    print(f"  Security issues   : {security_report.total_issues} "
-          f"({security_report.module_safe_pct}% safe; {security_report.by_status})")
+    if foreign:
+        complex_funcs = [fc.name for fc in cg.function_contexts if fc.complexity_label != "simple"]
+        print(f"  Comment style     : {'Javadoc' if language == 'java' else 'Doxygen'}")
+        print(f"  Non-simple functions: {len(complex_funcs)}"
+              + (f" ({', '.join(complex_funcs[:5])})" if complex_funcs else ""))
+    else:
+        print(f"  IR functions built: {len(ir_module.functions)}")
+        print(f"  Analysis findings : {len(analysis_report.findings)}")
+        print(f"  Security issues   : {security_report.total_issues} "
+              f"({security_report.module_safe_pct}% safe; {security_report.by_status})")
     print()
 
-    if args.security_report:
+    if args.security_report and not foreign:
         print("--- Security Findings (original source locations) ---")
         for f in security_report.findings:
             print(f.format_text())
             print()
-    if args.security_json:
+    if args.security_json and not foreign:
         _write_security_json(args.security_json, {
             "file": filepath, "summary": security_report.by_status,
             "findings": [f.to_dict() for f in security_report.findings],
         })
 
     for c in comments:
-        kind_tag = "[docstring]" if c.kind == "docstring" else "[inline]  "
+        kind_tag = {"docstring": "[docstring]", "block": "[doc]      "}.get(c.kind, "[inline]   ")
         print(f"  {kind_tag} {c.node_type} '{c.target_name}' (line {c.lineno})")
 
     # ── Output annotated file ─────────────────────────────────────
@@ -476,6 +508,9 @@ def main():
         print(f"\n  Logs saved:")
         print(f"    JSON : {json_path}")
         print(f"    Text : {text_path}")
+        if foreign:
+            print(f"\n{'='*55}\n")
+            return
         report_path = os.path.join(output_dir, "analysis_report.json")
         os.makedirs(output_dir, exist_ok=True)
         with open(report_path, 'w', encoding='utf-8') as rf:

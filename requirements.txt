@@ -20,6 +20,12 @@ sentencepiece
 datasets>=2.19
 nltk
 
+# ── Java / C / C++ input (tree-sitter parsers) ─────────────────────────
+tree-sitter>=0.23
+tree-sitter-java
+tree-sitter-c
+tree-sitter-cpp
+
 # ── GUI (required for run_gui.py) ─────────────────────────────────────────
 PyQt6
 matplotlib          # security and evaluation charts

@@ -226,3 +226,6 @@ tests/logs/
 tests/outputs/
 outputs/logs/
 outputs/*.txt
+
+# Submission package (reports, screenshots, recording, ZIP) — not source
+submission/

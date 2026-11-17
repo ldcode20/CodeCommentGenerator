@@ -1,9 +1,12 @@
 # Code Comment Generator — AST + NLP
 
-This project generates Python comments/docstrings using two engines:
+This project generates comments and docstrings from the syntax tree of the code.
+It supports **Python, Java, C and C++** (see [Other languages](#other-languages-java-c-c)).
+For Python there are three engines:
 
 - `Rule-Based` (deterministic AST analysis)
 - `AST+NLP ML` (model trained on structured AST features -> natural-language docstrings)
+- `Neurosymbolic` (the ML summary, used only when its confidence is high enough, plus rule-based sections)
 
 It also contains a static **security analyzer** (taint analysis over a real
 IR/CFG plus AST rules) that runs independently of comment generation — see
@@ -126,6 +129,34 @@ python -m src.main --train \
 ```bash
 python -m src.main tests/inputs/complex_sample.py
 ```
+
+### Other languages (Java, C, C++)
+
+The same command works for Java, C and C++ files; the language is chosen from the file
+extension (`.java`, `.c`/`.h`, `.cpp`/`.cc`/`.cxx`/`.hpp`; a `.h` file that uses C++ syntax is
+treated as C++). In the desktop app, the **Language** box next to *Open File* switches
+automatically and can be set by hand for pasted code.
+
+```bash
+python -m src.main tests/inputs/multilang/Inventory.java     # Javadoc
+python -m src.main tests/inputs/multilang/matrix.c           # Doxygen
+python -m src.main tests/inputs/multilang/shapes.cpp -o out/shapes_annotated.cpp
+```
+
+| | Python | Java | C / C++ |
+|---|---|---|---|
+| Comment style | Google docstrings | Javadoc (`@param`, `@return`, `@throws`) | Doxygen (`@brief`, `@param`, `@param[out]`, `@return`, `@throws`) |
+| Parser | Python `ast` | tree-sitter | tree-sitter |
+| Comments for | functions, methods, classes | methods, constructors, classes, interfaces, enums, records | functions, prototypes in headers, methods, constructors, destructors, templates, classes, structs, unions, enums |
+| Complexity, call graph, AST views | yes | yes | yes |
+| ML / neurosymbolic engines | yes | rule-based only (the model was trained on Python) | rule-based only |
+| IR, pattern analysis, security scan | yes | no | no |
+
+Existing documentation is respected: a Java declaration with a `/** */` comment, or a C/C++
+declaration with any comment directly above it, is left alone, so running the tool twice adds
+nothing new. Indentation (tabs included) is copied from the declaration. Install the parsers
+with `pip install tree-sitter tree-sitter-java tree-sitter-c tree-sitter-cpp` (already in
+`requirements.txt`). The front end lives in `src/languages/`.
 
 ### 3) AST+NLP ML generation
 
